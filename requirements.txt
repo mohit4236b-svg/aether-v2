@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+httpx
+pydantic>=2.7
+python-dotenv
+google-genai
+groq
+pytest
+pytest-asyncio
+ruff
