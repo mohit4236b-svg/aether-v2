@@ -401,7 +401,10 @@ async def _run_gemini(
     from google import genai
     from google.genai import types
 
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(api_version="v1beta"),
+    )
 
     # Convert our python tools to types.Tool
     tools = [
@@ -433,7 +436,12 @@ async def _run_gemini(
             return await res
         return res
 
-    models_to_try = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"]
+    models_to_try = [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-3.8-flash",
+    ]
     response = None
     chosen_model = models_to_try[0]
 
@@ -564,6 +572,8 @@ async def _run_groq(
         second_resp = await client.chat.completions.create(
             model=chosen_model,
             messages=messages,  # type: ignore[arg-type]
+            tools=GROQ_TOOLS,  # type: ignore[arg-type]
+            tool_choice="none",
         )
         reply_text = second_resp.choices[0].message.content or "Completed analysis."
     else:
