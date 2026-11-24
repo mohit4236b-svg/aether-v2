@@ -5,8 +5,15 @@ clean air routing, deterministic schedule optimization, and Glass-Box Agentic Co
 """
 
 import os
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+
+# Ensure repository root is in sys.path for Vercel serverless environment
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
