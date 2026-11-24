@@ -4,10 +4,12 @@ import AtmosphereHero from './components/AtmosphereHero';
 import TimelineChart from './components/TimelineChart';
 import DoseSimulator from './components/DoseSimulator';
 import CleanAirMap from './components/CleanAirMap';
+import AgentDrawer from './components/AgentDrawer';
 import { fetchAtmosphere } from './lib/api';
 import {
   Calendar,
   Bot,
+  Sparkles,
 } from 'lucide-react';
 
 export default function App() {
@@ -15,6 +17,7 @@ export default function App() {
   const [coords, setCoords] = useState({ lat: 28.6139, lon: 77.2090 });
   const [activePersona, setActivePersona] = useState('healthy_adult');
   const [hasHepa, setHasHepa] = useState(false);
+  const [isAgentDrawerOpen, setIsAgentDrawerOpen] = useState(false);
 
   const [atmosphere, setAtmosphere] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -111,7 +114,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Section 4: 24h Conflict-Free Schedule Optimizer Slot (Prompt 7) */}
+        {/* Section 4: 24h Conflict-Free Schedule Optimizer Slot */}
         <div className="glass-surface glass-surface-hover rounded-2xl p-6 border border-glass">
           <div className="flex items-center justify-between pb-3 border-b border-glass">
             <div className="flex items-center gap-2">
@@ -120,9 +123,14 @@ export default function App() {
                 24-Hour Conflict-Free Schedule Optimizer
               </h3>
             </div>
-            <span className="rounded bg-white/10 px-2 py-0.5 text-[10px] font-mono text-slate-300">
-              Prompt 7 Target
-            </span>
+            <button
+              type="button"
+              onClick={() => setIsAgentDrawerOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg border border-amber/40 bg-amber/10 px-2.5 py-1 text-xs font-medium text-amber hover:bg-amber/20 transition-all active:scale-[0.97]"
+            >
+              <Sparkles className="h-3 w-3" />
+              <span>Optimize with Co-Pilot</span>
+            </button>
           </div>
           <p className="mt-2 text-xs text-slate-400">
             Deterministic interval scheduler optimizing commute, outdoor workouts, and room ventilation to minimize
@@ -148,10 +156,13 @@ export default function App() {
           </div>
         </div>
 
-        {/* Section 5: Glass-Box Agentic Co-Pilot Drawer Banner (Prompt 7) */}
-        <div className="glass-surface rounded-2xl p-4 border border-cobalt/30 bg-cobalt/[0.05] flex items-center justify-between">
+        {/* Section 5: Glass-Box Agentic Co-Pilot Banner & Trigger */}
+        <div
+          onClick={() => setIsAgentDrawerOpen(true)}
+          className="glass-surface glass-surface-hover rounded-2xl p-4 border border-cobalt/30 bg-cobalt/[0.05] flex flex-wrap items-center justify-between gap-3 cursor-pointer group transition-all"
+        >
           <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-xl bg-cobalt/20 border border-cobalt/40 flex items-center justify-center text-cobalt">
+            <div className="h-9 w-9 rounded-xl bg-cobalt/20 border border-cobalt/40 flex items-center justify-center text-cobalt group-hover:scale-105 transition-transform">
               <Bot className="h-5 w-5" />
             </div>
             <div>
@@ -166,11 +177,35 @@ export default function App() {
               </p>
             </div>
           </div>
-          <span className="font-mono text-xs text-cobalt border border-cobalt/30 rounded-lg px-2.5 py-1">
-            /api/agent/chat
-          </span>
+          <button
+            type="button"
+            className="flex items-center gap-1.5 rounded-lg bg-cobalt px-3.5 py-1.5 text-xs font-semibold text-white shadow-glowCobalt group-hover:bg-cobalt/90 active:scale-[0.97]"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            <span>Launch Co-Pilot</span>
+          </button>
         </div>
       </main>
+
+      {/* Floating Action Button for Co-Pilot */}
+      <button
+        type="button"
+        onClick={() => setIsAgentDrawerOpen(true)}
+        className="fixed bottom-6 right-6 z-30 flex items-center gap-2 rounded-full border border-cobalt/40 bg-cobalt px-4 py-2.5 text-xs font-semibold text-white shadow-glowCobalt transition-all hover:bg-cobalt/90 active:scale-[0.95]"
+      >
+        <Bot className="h-4 w-4" />
+        <span>Aether Co-Pilot</span>
+        <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+      </button>
+
+      {/* Slide-Over Glass-Box Agent Drawer */}
+      <AgentDrawer
+        isOpen={isAgentDrawerOpen}
+        onClose={() => setIsAgentDrawerOpen(false)}
+        activeCity={activeCity}
+        coords={coords}
+        activePersona={activePersona}
+      />
 
       {/* Footer */}
       <footer className="mt-auto border-t border-glass py-4 text-center text-xs text-slate-500">
