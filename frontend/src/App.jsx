@@ -2,18 +2,12 @@ import React, { useState, useEffect } from 'react';
 import TopBar from './components/TopBar';
 import AtmosphereHero from './components/AtmosphereHero';
 import TimelineChart from './components/TimelineChart';
+import DoseSimulator from './components/DoseSimulator';
+import CleanAirMap from './components/CleanAirMap';
 import { fetchAtmosphere } from './lib/api';
 import {
-  Map,
   Calendar,
-  Sparkles,
   Bot,
-  Route,
-  Activity,
-  Layers,
-  Shield,
-  HelpCircle,
-  ExternalLink,
 } from 'lucide-react';
 
 export default function App() {
@@ -99,66 +93,21 @@ export default function App() {
         {/* Section 2: 24h Diurnal Timeline Chart */}
         <TimelineChart atmosphere={atmosphere} loading={loading} />
 
-        {/* Section 3: 12-Column Grid for Subsequent Prompts (DoseSimulator & CleanAirMap) */}
+        {/* Section 3: 12-Column Responsive Grid (DoseSimulator & CleanAirMap) */}
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          {/* Slot 1: Clinical Respiratory Dose Simulator (Prompt 6) */}
-          <div className="lg:col-span-6 glass-surface glass-surface-hover rounded-2xl p-6 border border-glass flex flex-col justify-between min-h-[340px]">
-            <div>
-              <div className="flex items-center justify-between pb-3 border-b border-glass">
-                <div className="flex items-center gap-2">
-                  <Activity className="h-4 w-4 text-cobalt" />
-                  <h3 className="text-sm font-semibold text-white tracking-tight">Respiratory Dose Simulator</h3>
-                </div>
-                <span className="rounded bg-white/10 px-2 py-0.5 text-[10px] font-mono text-slate-300">
-                  Prompt 6 Target
-                </span>
-              </div>
-              <p className="mt-3 text-xs text-slate-400 leading-relaxed">
-                Personalized inhalation and alveolar deposition modeling calibrated to active persona, mask fit factor,
-                activity minute ventilation rate (V_E), and cigarette equivalent metrics.
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-dashed border-glass/60 bg-white/[0.01] p-6 text-center my-4">
-              <Shield className="mx-auto h-8 w-8 text-slate-500 mb-2" />
-              <p className="text-xs font-medium text-slate-300">Respiratory Dose Engine Ready</p>
-              <p className="text-[11px] text-slate-500 mt-1">Interactive slider controls and persona budget dials wired in next step.</p>
-            </div>
-
-            <div className="flex items-center justify-between pt-3 border-t border-glass text-xs text-slate-400">
-              <span>Backend endpoint: <code className="font-mono text-slate-300">/api/dose/simulate</code></span>
-              <span className="font-mono text-emerald">Verified Active</span>
-            </div>
+          {/* Dose Simulator Component */}
+          <div className="lg:col-span-6 flex flex-col">
+            <DoseSimulator atmosphere={atmosphere} activePersona={activePersona} />
           </div>
 
-          {/* Slot 2: Clean Air Route Scorer & Map (Prompt 6) */}
-          <div className="lg:col-span-6 glass-surface glass-surface-hover rounded-2xl p-6 border border-glass flex flex-col justify-between min-h-[340px]">
-            <div>
-              <div className="flex items-center justify-between pb-3 border-b border-glass">
-                <div className="flex items-center gap-2">
-                  <Route className="h-4 w-4 text-emerald" />
-                  <h3 className="text-sm font-semibold text-white tracking-tight">Clean Air LUR Routing Engine</h3>
-                </div>
-                <span className="rounded bg-white/10 px-2 py-0.5 text-[10px] font-mono text-slate-300">
-                  Prompt 6 Target
-                </span>
-              </div>
-              <p className="mt-3 text-xs text-slate-400 leading-relaxed">
-                Segment-level Land-Use Regression road type multipliers (arterial 1.40 vs cycleway 0.65) and uphill
-                steepness ventilation penalties with Leaflet interactive route comparison.
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-dashed border-glass/60 bg-white/[0.01] p-6 text-center my-4">
-              <Map className="mx-auto h-8 w-8 text-slate-500 mb-2" />
-              <p className="text-xs font-medium text-slate-300">OpenRouteService & OSRM Fallback Ready</p>
-              <p className="text-[11px] text-slate-500 mt-1">Interactive Leaflet GeoJSON layer and savings ranking wired in next step.</p>
-            </div>
-
-            <div className="flex items-center justify-between pt-3 border-t border-glass text-xs text-slate-400">
-              <span>Backend endpoint: <code className="font-mono text-slate-300">/api/routes/compare</code></span>
-              <span className="font-mono text-emerald">Verified Active</span>
-            </div>
+          {/* Clean Air Map Component */}
+          <div className="lg:col-span-6 flex flex-col">
+            <CleanAirMap
+              coords={coords}
+              activeCity={activeCity}
+              atmosphere={atmosphere}
+              activePersona={activePersona}
+            />
           </div>
         </div>
 
