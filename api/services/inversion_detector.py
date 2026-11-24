@@ -20,6 +20,7 @@ def analyze_inversion_series(
     hourly_times: list[str],
     blh_list: list[float | None],
     wind_speed_kmh_list: list[float | None],
+    current_index: int = 0,
 ) -> InversionAnalysis:
     """Analyze a series of boundary layer heights and wind speeds to detect inversions and lift hours.
 
@@ -61,21 +62,22 @@ def analyze_inversion_series(
         computed_vi_series.append(vi)
         status_series.append(classify_ventilation(vi))
 
-    current_vi = computed_vi_series[0]
-    current_status = status_series[0]
+    safe_idx = max(0, min(current_index, len(computed_vi_series) - 1))
+    current_vi = computed_vi_series[safe_idx]
+    current_status = status_series[safe_idx]
 
-    # Search future hours for dispersion or lifting
+    # Search strictly future hours (after safe_idx) for dispersion or lifting
     lift_hour_iso: str | None = None
 
     # First look for dispersed
-    for idx in range(1, len(status_series)):
+    for idx in range(safe_idx + 1, len(status_series)):
         if status_series[idx] == DispersionStatus.dispersed:
             lift_hour_iso = hourly_times[idx]
             break
 
     # If never dispersed, look for lifting if currently trapped
     if lift_hour_iso is None and current_status == DispersionStatus.trapped:
-        for idx in range(1, len(status_series)):
+        for idx in range(safe_idx + 1, len(status_series)):
             if status_series[idx] == DispersionStatus.lifting:
                 lift_hour_iso = hourly_times[idx]
                 break

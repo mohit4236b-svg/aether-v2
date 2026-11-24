@@ -6,7 +6,7 @@ clean air routing, deterministic schedule optimization, and Glass-Box Agentic Co
 
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -138,14 +138,41 @@ async def get_atmosphere(
     aq_hourly = bundle.get("air_quality", {}).get("hourly", {})
     aq_times = aq_hourly.get("time", [])
     pm25_series = aq_hourly.get("pm2_5", [])
-    current_pm25 = float(pm25_series[0]) if pm25_series else 0.0
-    openaq_cal = await calibrate_with_openaq(lat, lon, current_pm25)
 
-    weather_hourly = bundle.get("weather", {}).get("hourly", {})
+    weather_dict = bundle.get("weather", {})
+    weather_hourly = weather_dict.get("hourly", {})
     w_times = weather_hourly.get("time", [])
     blh = weather_hourly.get("boundary_layer_height", [])
     wind = weather_hourly.get("wind_speed_10m", [])
-    inversion_res = analyze_inversion_series(w_times, blh, wind)
+
+    # Find the current local hour index using utc_offset_seconds from Open-Meteo
+    utc_offset = weather_dict.get("utc_offset_seconds")
+    if utc_offset is None:
+        utc_offset = bundle.get("air_quality", {}).get("utc_offset_seconds", 0)
+
+    current_index = 0
+    if w_times:
+        try:
+            tz = timezone(timedelta(seconds=utc_offset)) if utc_offset is not None else timezone.utc
+            now_local = datetime.now(tz)
+            target_str = now_local.strftime("%Y-%m-%dT%H:00")
+            if target_str in w_times:
+                current_index = w_times.index(target_str)
+            else:
+                for i, t_str in enumerate(w_times):
+                    if t_str >= target_str:
+                        current_index = i
+                        break
+        except (ValueError, TypeError, IndexError, OverflowError):
+            current_index = 0
+
+    current_pm25 = (
+        float(pm25_series[current_index])
+        if current_index < len(pm25_series) and pm25_series[current_index] is not None
+        else (float(pm25_series[0]) if pm25_series else 0.0)
+    )
+    openaq_cal = await calibrate_with_openaq(lat, lon, current_pm25)
+    inversion_res = analyze_inversion_series(w_times, blh, wind, current_index=current_index)
     vent_window = find_optimal_ventilation_window(aq_times, pm25_series, has_hepa=has_hepa)
 
     return {
@@ -156,6 +183,7 @@ async def get_atmosphere(
         "inversion": inversion_res.model_dump(),
         "openaq_calibration": openaq_cal,
         "ventilation_window": vent_window.model_dump(),
+        "current_index": current_index,
     }
 
 

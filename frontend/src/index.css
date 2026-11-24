@@ -34,6 +34,11 @@
   border: none;
 }
 
+/* Apple dark-mode filter for Leaflet base map tiles */
+.leaflet-tile-pane {
+  filter: invert(100%) hue-rotate(180deg) brightness(92%) contrast(90%) saturate(75%);
+}
+
 /* Custom scrollbar for clean dark aesthetic */
 ::-webkit-scrollbar {
   width: 6px;

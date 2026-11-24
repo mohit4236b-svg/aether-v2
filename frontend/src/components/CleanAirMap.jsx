@@ -275,8 +275,8 @@ export default function CleanAirMap({ coords, activeCity, atmosphere, activePers
             style={{ background: '#0D0D0F' }}
           >
             <TileLayer
-              attribution='&copy; <a href="https://carto.com/">CARTO</a>'
-              url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+              attribution='&copy; OpenStreetMap contributors'
+              url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
             />
             <MapRecenter center={coords} />
             <MapClickHandler onSelectPoint={handleMapClick} />

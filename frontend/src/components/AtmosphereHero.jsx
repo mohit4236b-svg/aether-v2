@@ -49,6 +49,23 @@ function calculateAqi(pm25) {
   }
 }
 
+function formatReadableTime(isoStr) {
+  if (!isoStr) return null;
+  try {
+    const timePart = isoStr.includes('T') ? isoStr.split('T')[1].slice(0, 5) : isoStr;
+    const [hStr, mStr] = timePart.split(':');
+    let h = parseInt(hStr, 10);
+    const m = mStr || '00';
+    if (isNaN(h)) return isoStr;
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12;
+    if (h === 0) h = 12;
+    return `${h}:${m} ${ampm}`;
+  } catch (e) {
+    return isoStr;
+  }
+}
+
 export default function AtmosphereHero({
   atmosphere,
   activePersona,
@@ -66,24 +83,26 @@ export default function AtmosphereHero({
     );
   }
 
-  const { forecast, inversion, openaq_calibration, ventilation_window } = atmosphere;
+  const { forecast, inversion, openaq_calibration, ventilation_window, current_index } = atmosphere;
   const aqHourly = forecast?.air_quality?.hourly || {};
   const weatherHourly = forecast?.weather?.hourly || {};
 
-  const currentPm25 = aqHourly.pm2_5?.[0] ?? 0;
-  const currentNo2 = aqHourly.nitrogen_dioxide?.[0] ?? 0;
-  const currentO3 = aqHourly.ozone?.[0] ?? 0;
-  const currentBlh = weatherHourly.boundary_layer_height?.[0] ?? 0;
-  const currentWind = weatherHourly.wind_speed_10m?.[0] ?? 0;
+  const curIdx = current_index ?? 0;
+  const currentPm25 = aqHourly.pm2_5?.[curIdx] ?? aqHourly.pm2_5?.[0] ?? 0;
+  const currentNo2 = aqHourly.nitrogen_dioxide?.[curIdx] ?? aqHourly.nitrogen_dioxide?.[0] ?? 0;
+  const currentO3 = aqHourly.ozone?.[curIdx] ?? aqHourly.ozone?.[0] ?? 0;
+  const currentBlh = weatherHourly.boundary_layer_height?.[curIdx] ?? weatherHourly.boundary_layer_height?.[0] ?? 0;
+  const currentWind = weatherHourly.wind_speed_10m?.[curIdx] ?? weatherHourly.wind_speed_10m?.[0] ?? 0;
 
   const aqiInfo = calculateAqi(currentPm25);
 
   // Inversion Status styling
   const invStatus = inversion?.status || 'trapped';
   const viVal = inversion?.ventilation_index_m2_s ?? (currentBlh * (currentWind / 3.6));
-  const liftHour = inversion?.lift_hour_iso
-    ? inversion.lift_hour_iso.split('T')[1]?.slice(0, 5) || inversion.lift_hour_iso
-    : null;
+  const liftHour = formatReadableTime(inversion?.lift_hour_iso);
+  const displayExplanation = inversion?.explanation?.replace(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})/g, (m) => {
+    return formatReadableTime(m) || m;
+  });
 
   // OpenAQ Calibration
   const isCalibrated = openaq_calibration?.available === true;
@@ -178,13 +197,13 @@ export default function AtmosphereHero({
             <div className="rounded-lg bg-white/[0.02] p-1.5">
               <p className="text-[10px] text-slate-400">NO2</p>
               <p className="font-mono text-xs font-medium text-slate-200 tabular-nums">
-                {currentNo2.toFixed(1)} <span className="text-[9px] text-slate-400">µg</span>
+                {currentNo2.toFixed(1)} <span className="text-[9px] text-slate-400">µg/m³</span>
               </p>
             </div>
             <div className="rounded-lg bg-white/[0.02] p-1.5">
               <p className="text-[10px] text-slate-400">O3</p>
               <p className="font-mono text-xs font-medium text-slate-200 tabular-nums">
-                {currentO3.toFixed(1)} <span className="text-[9px] text-slate-400">µg</span>
+                {currentO3.toFixed(1)} <span className="text-[9px] text-slate-400">µg/m³</span>
               </p>
             </div>
             <div className="rounded-lg bg-white/[0.02] p-1.5">
@@ -255,7 +274,7 @@ export default function AtmosphereHero({
 
           {/* Clinical summary */}
           <div className="mt-3 rounded-lg bg-white/[0.02] p-2.5 text-[11px] leading-relaxed text-slate-300 border border-glass/40">
-            {inversion?.explanation ||
+            {displayExplanation ||
               (invStatus === 'trapped'
                 ? 'Thermal capping prevents vertical mixing; particulates accumulate at ground level.'
                 : 'Turbulent boundary advection facilitates rapid airborne particulate dispersion.')}
@@ -269,9 +288,7 @@ export default function AtmosphereHero({
               <p className="text-xs font-medium uppercase tracking-wider text-slate-400">Bedroom Ventilation</p>
               <div className="mt-1 flex items-baseline gap-2">
                 <span className="font-mono text-2xl font-bold tracking-tight text-white">
-                  {ventilation_window?.best_start_hour_iso
-                    ? ventilation_window.best_start_hour_iso.split('T')[1]?.slice(0, 5) || '13:00'
-                    : '13:00'}
+                  {formatReadableTime(ventilation_window?.best_start_hour_iso) || '1:00 PM'}
                 </span>
                 <span className="text-xs font-medium text-slate-400">Optimal 1h Window</span>
               </div>

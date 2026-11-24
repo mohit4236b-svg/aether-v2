@@ -1,7 +1,7 @@
 """Glass-Box Agentic Co-Pilot with 6 typed tools and Dual-LLM Failover.
 
 Primary: google-genai SDK (gemini-2.5-flash) with native function calling.
-Automatic Failover: Groq (llama-3.3-70b-versatile) on missing key, 429, 5xx, or timeout.
+Automatic Failover: Groq (openai/gpt-oss-120b / openai/gpt-oss-20b) on missing key, 429, 5xx, or timeout.
 Deterministic Fallback: Offline local execution citing exact figures from real tools.
 """
 
@@ -453,7 +453,7 @@ async def _run_groq(
     message: str,
     tool_trace: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Execute query with Groq (llama-3.3-70b-versatile) tool calling."""
+    """Execute query with Groq (openai/gpt-oss-120b with fallback to openai/gpt-oss-20b) tool calling."""
     groq_key = os.environ.get("GROQ_API_KEY", "").strip()
     if not groq_key:
         raise ValueError("GROQ_API_KEY missing")
@@ -467,12 +467,27 @@ async def _run_groq(
         {"role": "user", "content": message},
     ]
 
-    resp = await client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=messages,  # type: ignore[arg-type]
-        tools=GROQ_TOOLS,  # type: ignore[arg-type]
-        tool_choice="auto",
-    )
+    models_to_try = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+    resp = None
+    chosen_model = models_to_try[0]
+
+    for model_name in models_to_try:
+        try:
+            resp = await client.chat.completions.create(
+                model=model_name,
+                messages=messages,  # type: ignore[arg-type]
+                tools=GROQ_TOOLS,  # type: ignore[arg-type]
+                tool_choice="auto",
+            )
+            chosen_model = model_name
+            break
+        except Exception as e:
+            logger.warning("Groq model %s error: %s", model_name, e)
+            if model_name == models_to_try[-1]:
+                raise
+
+    if resp is None:
+        raise RuntimeError("No Groq model succeeded")
 
     choice = resp.choices[0]
     msg = choice.message
@@ -496,7 +511,7 @@ async def _run_groq(
             )
 
         second_resp = await client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model=chosen_model,
             messages=messages,  # type: ignore[arg-type]
         )
         reply_text = second_resp.choices[0].message.content or "Completed analysis."
@@ -622,7 +637,7 @@ async def run_copilot(
     except (ValueError, TypeError, KeyError, RuntimeError, AttributeError, httpx.HTTPError) as e:
         logger.info("Primary Gemini failed or unavailable (%s), triggering Groq failover.", e)
 
-    # 2. Automatic Failover: Groq (llama-3.3-70b-versatile)
+    # 2. Automatic Failover: Groq (openai/gpt-oss-120b / openai/gpt-oss-20b)
     try:
         return await _run_groq(message, tool_trace)
     except (ValueError, TypeError, KeyError, RuntimeError, AttributeError, httpx.HTTPError) as e:
