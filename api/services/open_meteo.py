@@ -73,7 +73,21 @@ async def geocode_city(
         resp = await c.get(url)
         resp.raise_for_status()
         data = resp.json()
-        return data.get("results", [])
+        raw_results = data.get("results", []) or []
+        normalized: list[dict[str, Any]] = []
+        for item in raw_results:
+            lat_val = float(item.get("latitude", item.get("lat", 0.0)))
+            lon_val = float(item.get("longitude", item.get("lon", 0.0)))
+            normalized.append({
+                "name": str(item.get("name", "")),
+                "country": str(item.get("country", "")),
+                "admin1": str(item.get("admin1", "")),
+                "lat": lat_val,
+                "lon": lon_val,
+                "latitude": lat_val,
+                "longitude": lon_val,
+            })
+        return normalized
 
     try:
         if client is not None:

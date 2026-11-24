@@ -69,7 +69,7 @@ function MapClickHandler({ onSelectPoint }) {
 function MapRecenter({ center }) {
   const map = useMap();
   useEffect(() => {
-    if (center && center.lat && center.lon) {
+    if (center && Number.isFinite(center.lat) && Number.isFinite(center.lon)) {
       map.setView([center.lat, center.lon], 13);
     }
   }, [center, map]);
@@ -87,14 +87,17 @@ export default function CleanAirMap({ coords, activeCity, atmosphere, activePers
   // Set default sample commute for active city
   useEffect(() => {
     const cityKey = (activeCity || '').toLowerCase();
+    const safeLat = Number.isFinite(coords?.lat) ? coords.lat : 28.6139;
+    const safeLon = Number.isFinite(coords?.lon) ? coords.lon : 77.2090;
+
     const sample = SAMPLE_COMMUTES[cityKey] || {
-      origin: { lat: coords.lat, lon: coords.lon, label: `${activeCity} Origin` },
-      destination: { lat: coords.lat + 0.025, lon: coords.lon + 0.025, label: `${activeCity} Dest` },
+      origin: { lat: safeLat, lon: safeLon, label: `${activeCity} Origin` },
+      destination: { lat: safeLat + 0.025, lon: safeLon + 0.025, label: `${activeCity} Dest` },
     };
     setOrigin(sample.origin);
     setDestination(sample.destination);
     setRoutingResults(null);
-  }, [activeCity, coords.lat, coords.lon]);
+  }, [activeCity, coords?.lat, coords?.lon]);
 
   // Click map handler: sets A, then B, then resets
   const handleMapClick = (latlng) => {
@@ -268,7 +271,10 @@ export default function CleanAirMap({ coords, activeCity, atmosphere, activePers
         {/* Leaflet Dark Map Canvas */}
         <div className="relative mt-4 h-72 w-full overflow-hidden rounded-xl border border-glass">
           <MapContainer
-            center={[coords.lat, coords.lon]}
+            center={[
+              Number.isFinite(coords?.lat) ? coords.lat : 28.6139,
+              Number.isFinite(coords?.lon) ? coords.lon : 77.2090,
+            ]}
             zoom={13}
             scrollWheelZoom={false}
             className="h-full w-full z-10"
@@ -282,7 +288,7 @@ export default function CleanAirMap({ coords, activeCity, atmosphere, activePers
             <MapClickHandler onSelectPoint={handleMapClick} />
 
             {/* Origin Marker A */}
-            {origin && (
+            {origin && Number.isFinite(origin.lat) && Number.isFinite(origin.lon) && (
               <Marker position={[origin.lat, origin.lon]} icon={originMarkerIcon}>
                 <Popup className="text-xs font-sans">
                   <strong>Origin A:</strong> {origin.label || `${origin.lat.toFixed(3)}, ${origin.lon.toFixed(3)}`}
@@ -291,7 +297,7 @@ export default function CleanAirMap({ coords, activeCity, atmosphere, activePers
             )}
 
             {/* Destination Marker B */}
-            {destination && (
+            {destination && Number.isFinite(destination.lat) && Number.isFinite(destination.lon) && (
               <Marker position={[destination.lat, destination.lon]} icon={destMarkerIcon}>
                 <Popup className="text-xs font-sans">
                   <strong>Destination B:</strong> {destination.label || `${destination.lat.toFixed(3)}, ${destination.lon.toFixed(3)}`}

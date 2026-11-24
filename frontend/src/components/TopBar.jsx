@@ -29,6 +29,7 @@ export default function TopBar({
   const [searchResults, setSearchResults] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [toastMessage, setToastMessage] = useState(null);
   const searchRef = useRef(null);
 
   // Debounced search
@@ -67,13 +68,67 @@ export default function TopBar({
   }, []);
 
   const handleSelectResult = (item) => {
+    const lat = Number(item.lat ?? item.latitude);
+    const lon = Number(item.lon ?? item.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      setToastMessage('Invalid coordinates for selected location');
+      setTimeout(() => setToastMessage(null), 3000);
+      return;
+    }
     onSelectCity({
       name: item.city || item.name,
-      lat: item.lat,
-      lon: item.lon,
+      lat,
+      lon,
     });
     setSearchQuery('');
     setShowDropdown(false);
+  };
+
+  const handleKeyDown = async (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const q = searchQuery.trim();
+      if (!q) return;
+
+      // Check if user entered manual coordinates like "30.9, 76.8"
+      if (q.includes(',')) {
+        const parts = q.split(',').map((p) => parseFloat(p.trim()));
+        if (parts.length === 2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1])) {
+          onSelectCity({
+            name: `${parts[0].toFixed(2)}, ${parts[1].toFixed(2)}`,
+            lat: parts[0],
+            lon: parts[1],
+          });
+          setSearchQuery('');
+          setShowDropdown(false);
+          return;
+        }
+      }
+
+      // If results already available in dropdown, pick top one
+      if (searchResults.length > 0) {
+        handleSelectResult(searchResults[0]);
+        return;
+      }
+
+      // Otherwise trigger immediate geocode search
+      setIsSearching(true);
+      try {
+        const results = await geocodeCity(q);
+        if (results && results.length > 0) {
+          handleSelectResult(results[0]);
+        } else {
+          setToastMessage(`City "${q}" not found`);
+          setTimeout(() => setToastMessage(null), 3500);
+        }
+      } catch (err) {
+        console.error('Geocode search failed:', err);
+        setToastMessage(`Search error: ${err.message || 'Unable to locate city'}`);
+        setTimeout(() => setToastMessage(null), 3500);
+      } finally {
+        setIsSearching(false);
+      }
+    }
   };
 
   return (
@@ -98,13 +153,14 @@ export default function TopBar({
           </div>
 
           {/* Autocomplete City Search */}
-          <div className="relative flex-1 sm:max-w-xs md:max-w-sm" ref={searchRef}>
+          <div className="relative flex-1 sm:max-w-xs md:max-w-sm z-50" ref={searchRef}>
             <div className="relative flex items-center">
               <Search className="pointer-events-none absolute left-3 h-4 w-4 text-slate-400" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={handleKeyDown}
                 onFocus={() => searchResults.length > 0 && setShowDropdown(true)}
                 placeholder="Search city or coordinates (lat, lon)..."
                 className="w-full rounded-xl border border-glass bg-surface py-2 pl-9 pr-8 text-xs text-slate-100 placeholder-slate-500 backdrop-blur-md transition-all focus:border-cobalt/50 focus:bg-white/[0.06] focus:outline-none focus:ring-1 focus:ring-cobalt/50"
@@ -120,6 +176,20 @@ export default function TopBar({
               )}
             </div>
 
+            {/* City Not Found Notification Toast */}
+            {toastMessage && (
+              <div className="absolute left-0 top-full mt-1.5 w-full z-50 rounded-xl border border-amber/40 bg-[#16161A] px-3.5 py-2 text-xs font-medium text-amber shadow-2xl backdrop-blur-2xl flex items-center justify-between">
+                <span>{toastMessage}</span>
+                <button
+                  type="button"
+                  onClick={() => setToastMessage(null)}
+                  className="p-0.5 text-amber/70 hover:text-amber"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            )}
+
             {/* Dropdown Suggestions */}
             {showDropdown && (
               <div className="absolute left-0 top-full mt-1.5 w-full overflow-hidden rounded-xl border border-glass bg-[#141418] shadow-2xl backdrop-blur-2xl z-50">
@@ -127,26 +197,35 @@ export default function TopBar({
                   <div className="px-4 py-3 text-xs text-slate-400">Searching global coordinates...</div>
                 ) : (
                   <ul className="divide-y divide-white/[0.04]">
-                    {searchResults.map((item, idx) => (
-                      <li key={`${item.name}-${idx}`}>
-                        <button
-                          type="button"
-                          onClick={() => handleSelectResult(item)}
-                          className="flex w-full items-center justify-between px-3.5 py-2.5 text-left text-xs text-slate-200 transition-colors hover:bg-white/[0.06]"
-                        >
-                          <div className="flex items-center gap-2">
-                            <MapPin className="h-3.5 w-3.5 text-cobalt" />
-                            <span className="font-medium text-white">{item.city || item.name}</span>
-                            {item.country && (
-                              <span className="text-[11px] text-slate-400">{item.country}</span>
-                            )}
-                          </div>
-                          <span className="font-mono text-[10px] text-slate-500">
-                            {item.lat.toFixed(2)}, {item.lon.toFixed(2)}
-                          </span>
-                        </button>
-                      </li>
-                    ))}
+                    {searchResults.map((item, idx) => {
+                      const itemLat = Number(item.lat ?? item.latitude);
+                      const itemLon = Number(item.lon ?? item.longitude);
+                      return (
+                        <li key={`${item.name}-${idx}`}>
+                          <button
+                            type="button"
+                            onClick={() => handleSelectResult(item)}
+                            className="flex w-full items-center justify-between px-3.5 py-2.5 text-left text-xs text-slate-200 transition-colors hover:bg-white/[0.06]"
+                          >
+                            <div className="flex items-center gap-2">
+                              <MapPin className="h-3.5 w-3.5 text-cobalt" />
+                              <span className="font-medium text-white">{item.name}</span>
+                              {item.admin1 && (
+                                <span className="text-[11px] text-slate-400">{item.admin1},</span>
+                              )}
+                              {item.country && (
+                                <span className="text-[11px] text-slate-400">{item.country}</span>
+                              )}
+                            </div>
+                            <span className="font-mono text-[10px] text-slate-500">
+                              {Number.isFinite(itemLat) && Number.isFinite(itemLon)
+                                ? `${itemLat.toFixed(2)}, ${itemLon.toFixed(2)}`
+                                : ''}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>
