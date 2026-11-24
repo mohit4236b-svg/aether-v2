@@ -1,6 +1,7 @@
 """Open-Meteo atmospheric data fusion service with parallel fetching and TTL caching."""
 
 import asyncio
+import re
 import time
 from typing import Any
 
@@ -66,10 +67,42 @@ async def geocode_city(
     query: str,
     client: httpx.AsyncClient | None = None,
 ) -> list[dict[str, Any]]:
-    """Geocode a city or locality name using Open-Meteo Geocoding API."""
-    url = f"https://geocoding-api.open-meteo.com/v1/search?name={query}&count=5&language=en&format=json"
+    """Geocode a city, town, village, or direct coordinates.
 
-    async def _do_req(c: httpx.AsyncClient) -> list[dict[str, Any]]:
+    1. Direct coordinates support: 'lat, lon'.
+    2. Primary lookup: Open-Meteo Geocoding API.
+    3. Automatic Nominatim fallback: OpenStreetMap Nominatim for small towns/villages.
+    """
+    clean_query = query.strip()
+    if not clean_query:
+        return []
+
+    # 1. Direct coordinates support: 'lat, lon' (e.g., 31.69, 76.73)
+    coord_match = re.match(
+        r"^([+-]?\d+(?:\.\d+)?)\s*,\s*([+-]?\d+(?:\.\d+)?)$",
+        clean_query,
+    )
+    if coord_match:
+        try:
+            lat = float(coord_match.group(1))
+            lon = float(coord_match.group(2))
+            if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+                return [
+                    {
+                        "name": f"{lat:.4f}, {lon:.4f}",
+                        "country": "Custom",
+                        "admin1": "",
+                        "lat": lat,
+                        "lon": lon,
+                        "latitude": lat,
+                        "longitude": lon,
+                    }
+                ]
+        except ValueError:
+            pass
+
+    async def _do_open_meteo(c: httpx.AsyncClient) -> list[dict[str, Any]]:
+        url = f"https://geocoding-api.open-meteo.com/v1/search?name={clean_query}&count=5&language=en&format=json"
         resp = await c.get(url)
         resp.raise_for_status()
         data = resp.json()
@@ -89,11 +122,72 @@ async def geocode_city(
             })
         return normalized
 
+    async def _do_nominatim(c: httpx.AsyncClient) -> list[dict[str, Any]]:
+        url = "https://nominatim.openstreetmap.org/search"
+        params = {
+            "q": clean_query,
+            "format": "json",
+            "limit": 5,
+            "addressdetails": 1,
+        }
+        headers = {
+            "User-Agent": "AetherUrbanAirQuality/2.0 (hackathon-project)",
+        }
+        resp = await c.get(url, params=params, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+        if not isinstance(data, list):
+            return []
+        normalized: list[dict[str, Any]] = []
+        for item in data:
+            address = item.get("address", {}) or {}
+            name = (
+                address.get("town")
+                or address.get("village")
+                or address.get("city")
+                or address.get("municipality")
+                or address.get("hamlet")
+                or address.get("suburb")
+                or (str(item.get("display_name", "")).split(",")[0].strip() if item.get("display_name") else clean_query)
+            )
+            country = str(address.get("country", ""))
+            admin1 = str(address.get("state") or address.get("province") or address.get("region", ""))
+            try:
+                lat_val = float(item.get("lat", 0.0))
+                lon_val = float(item.get("lon", 0.0))
+            except (ValueError, TypeError):
+                continue
+            normalized.append({
+                "name": str(name),
+                "country": country,
+                "admin1": admin1,
+                "lat": lat_val,
+                "lon": lon_val,
+                "latitude": lat_val,
+                "longitude": lon_val,
+            })
+        return normalized
+
+    async def _execute(c: httpx.AsyncClient) -> list[dict[str, Any]]:
+        # 2. Primary lookup: Open-Meteo
+        try:
+            results = await _do_open_meteo(c)
+            if results:
+                return results
+        except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError):
+            pass
+
+        # 3. Fallback lookup: Nominatim
+        try:
+            return await _do_nominatim(c)
+        except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError):
+            return []
+
     try:
         if client is not None:
-            return await _do_req(client)
+            return await _execute(client)
         async with httpx.AsyncClient(timeout=10.0) as c:
-            return await _do_req(c)
+            return await _execute(c)
     except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError):
         return []
 

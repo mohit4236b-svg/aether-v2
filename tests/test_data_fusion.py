@@ -184,6 +184,65 @@ async def test_geocode_city_success() -> None:
 
 
 @pytest.mark.asyncio
+async def test_geocode_city_direct_coordinates() -> None:
+    """Verify coordinate input 'lat, lon' returns normalized result immediately without network calls."""
+    # Using client that raises if any HTTP request is attempted
+    def fail_handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"Unexpected HTTP request made: {request.url}")
+
+    transport = httpx.MockTransport(fail_handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        results = await geocode_city("31.69, 76.73", client=client)
+        assert len(results) == 1
+        assert results[0]["name"] == "31.6900, 76.7300"
+        assert results[0]["country"] == "Custom"
+        assert results[0]["admin1"] == ""
+        assert results[0]["lat"] == 31.69
+        assert results[0]["lon"] == 76.73
+
+
+@pytest.mark.asyncio
+async def test_geocode_city_nominatim_fallback() -> None:
+    """Verify fallback to OpenStreetMap Nominatim when Open-Meteo returns zero results."""
+    mock_open_meteo_empty = {"results": []}
+    mock_nominatim_resp = [
+        {
+            "place_id": 99999,
+            "lat": "31.7013",
+            "lon": "76.7383",
+            "display_name": "Sarkaghat, Mandi, Himachal Pradesh, 175024, India",
+            "address": {
+                "town": "Sarkaghat",
+                "county": "Mandi",
+                "state": "Himachal Pradesh",
+                "country": "India",
+            },
+        }
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url_str = str(request.url)
+        if "geocoding-api.open-meteo.com" in url_str:
+            return httpx.Response(200, json=mock_open_meteo_empty)
+        elif "nominatim.openstreetmap.org" in url_str:
+            assert request.headers.get("user-agent") == "AetherUrbanAirQuality/2.0 (hackathon-project)"
+            return httpx.Response(200, json=mock_nominatim_resp)
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        results = await geocode_city("sarkaghat", client=client)
+        assert len(results) == 1
+        assert results[0]["name"] == "Sarkaghat"
+        assert results[0]["country"] == "India"
+        assert results[0]["admin1"] == "Himachal Pradesh"
+        assert results[0]["lat"] == 31.7013
+        assert results[0]["lon"] == 76.7383
+        assert results[0]["latitude"] == 31.7013
+        assert results[0]["longitude"] == 76.7383
+
+
+@pytest.mark.asyncio
 async def test_openaq_missing_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify missing API key returns model-only response without error."""
     monkeypatch.delenv("OPENAQ_API_KEY", raising=False)
