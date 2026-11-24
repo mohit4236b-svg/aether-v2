@@ -437,9 +437,6 @@ async def _run_gemini(
         return res
 
     models_to_try = [
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
         "gemini-3.8-flash",
     ]
     response = None
@@ -697,15 +694,15 @@ async def run_copilot(
     """Execute Glass-Box Copilot with Dual-LLM Failover and Deterministic Fallback."""
     tool_trace: list[dict[str, Any]] = []
 
-    # 1. Primary: Google GenAI (gemini-2.0-flash)
+    # 1. Primary: Google GenAI (gemini-3.8-flash)
     try:
-        return await _run_gemini(message, tool_trace)
+        return await asyncio.wait_for(_run_gemini(message, tool_trace), timeout=10.0)
     except Exception as e:  # noqa: BLE001
         logger.info("Primary Gemini failed or unavailable (%s), triggering Groq failover.", e)
 
     # 2. Automatic Failover: Groq (openai/gpt-oss-120b / openai/gpt-oss-20b)
     try:
-        return await _run_groq(message, tool_trace)
+        return await asyncio.wait_for(_run_groq(message, tool_trace), timeout=15.0)
     except Exception as e:  # noqa: BLE001
         logger.info("Groq failover failed or unavailable (%s), triggering deterministic fallback.", e)
 
