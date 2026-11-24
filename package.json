@@ -1,0 +1,9 @@
+{
+  "name": "aether-v2",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Aether v2 — Autonomous Clinical Atmospheric & Smog Intelligence Platform",
+  "scripts": {
+    "build": "npm --prefix frontend install && npm --prefix frontend run build"
+  }
+}
