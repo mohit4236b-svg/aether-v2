@@ -83,9 +83,12 @@ class ChatRequest(BaseModel):
     """Payload for conversational Glass-Box Agent interaction."""
 
     message: str = Field(description="User prompt or question")
-    city_or_coords: str = Field(default="Delhi", description="Active geographic context")
+    city_name: str | None = Field(default=None, description="Active city name")
+    city_or_coords: str | None = Field(default="Delhi", description="Active geographic context fallback")
+    lat: float | None = Field(default=None, description="Active latitude")
+    lon: float | None = Field(default=None, description="Active longitude")
     persona: str = Field(default="healthy_adult", description="Clinical persona profile")
-    history: list[dict[str, str]] = Field(default_factory=list, description="Conversation history")
+    history: list[dict[str, Any]] = Field(default_factory=list, description="Conversation history (last 6 turns)")
 
 
 @app.get("/")
@@ -226,9 +229,22 @@ async def optimize_schedule_endpoint(req: ScheduleOptimizeRequest) -> dict[str, 
 @app.post("/agent/chat")
 async def agent_chat_endpoint(req: ChatRequest) -> dict[str, Any]:
     """Glass-Box Agentic Co-Pilot with Dual-LLM Failover and populated tool traces."""
+    city_name = req.city_name or req.city_or_coords or "Delhi"
+    lat = req.lat
+    lon = req.lon
+
+    if (lat is None or lon is None) and city_name in DEMO_CITIES:
+        lat = DEMO_CITIES[city_name]["lat"]
+        lon = DEMO_CITIES[city_name]["lon"]
+    elif lat is None or lon is None:
+        lat = 28.6139
+        lon = 77.2090
+
     return await run_copilot(
         message=req.message,
-        city_or_coords=req.city_or_coords,
+        city_name=city_name,
+        lat=lat,
+        lon=lon,
         persona=req.persona,
         history=req.history,
     )

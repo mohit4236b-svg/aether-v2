@@ -25,15 +25,15 @@ const STARTER_PROMPTS = [
 ];
 
 function getProviderBadge(provider) {
-  if (provider === 'gemini-2.5-flash') {
+  if (provider && provider.startsWith('gemini')) {
     return {
       label: 'Gemini 2.5 Flash',
       colorClass: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
       dotColor: 'bg-blue-400',
     };
-  } else if (provider === 'groq_failover') {
+  } else if (provider === 'groq_failover' || (provider && provider.includes('groq'))) {
     return {
-      label: 'Groq Failover (Llama 3.3)',
+      label: 'Groq Failover',
       colorClass: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
       dotColor: 'bg-amber-400',
     };
@@ -49,6 +49,66 @@ function getProviderBadge(provider) {
     colorClass: 'bg-white/10 text-slate-300 border-white/15',
     dotColor: 'bg-slate-400',
   };
+}
+
+function FormattedMessage({ content }) {
+  if (!content) return null;
+
+  const renderInline = (str) => {
+    const parts = str.split(/(\*\*[^*]+\*\*)/g);
+    return parts.map((part, i) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return (
+          <strong key={i} className="font-semibold text-white">
+            {part.slice(2, -2)}
+          </strong>
+        );
+      }
+      return part;
+    });
+  };
+
+  const lines = content.split('\n');
+  const renderedElements = [];
+  let currentBullets = [];
+
+  const flushBullets = () => {
+    if (currentBullets.length > 0) {
+      renderedElements.push(
+        <ul key={`ul-${renderedElements.length}`} className="my-1.5 space-y-1 pl-4 list-disc marker:text-cobalt text-xs text-slate-200">
+          {currentBullets.map((item, idx) => (
+            <li key={idx} className="leading-relaxed">
+              {renderInline(item)}
+            </li>
+          ))}
+        </ul>
+      );
+      currentBullets = [];
+    }
+  };
+
+  lines.forEach((line, idx) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushBullets();
+      return;
+    }
+
+    if (trimmed.startsWith('• ') || trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+      currentBullets.push(trimmed.slice(2));
+    } else {
+      flushBullets();
+      renderedElements.push(
+        <p key={`p-${idx}`} className="leading-relaxed my-1">
+          {renderInline(trimmed)}
+        </p>
+      );
+    }
+  });
+
+  flushBullets();
+
+  return <div className="space-y-1 text-xs text-slate-200">{renderedElements}</div>;
 }
 
 export default function AgentDrawer({
@@ -117,11 +177,18 @@ export default function AgentDrawer({
 
     const historyPayload = messages
       .filter((m) => m.id !== 'welcome')
+      .slice(-6)
       .map((m) => ({ role: m.role, content: m.content }));
 
     try {
-      const cityContext = activeCity || `${coords.lat},${coords.lon}`;
-      const res = await sendChatMessage(text, cityContext, activePersona, historyPayload);
+      const res = await sendChatMessage({
+        message: text,
+        cityName: activeCity,
+        lat: coords?.lat,
+        lon: coords?.lon,
+        persona: activePersona,
+        history: historyPayload,
+      });
 
       const assistantMsgId = `assistant-${Date.now()}`;
       const assistantMsg = {
@@ -268,7 +335,7 @@ export default function AgentDrawer({
 
                     {/* Assistant Prose Message */}
                     <div className="glass-surface rounded-2xl rounded-tl-none p-4 text-xs leading-relaxed text-slate-200 border border-glass">
-                      <p className="whitespace-pre-wrap">{msg.content}</p>
+                      <FormattedMessage content={msg.content} />
 
                       {/* Visual Schedule Timeline Card if returned */}
                       {msg.schedule && Array.isArray(msg.schedule.scheduled_tasks) && (

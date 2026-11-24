@@ -5,12 +5,18 @@ import TimelineChart from './components/TimelineChart';
 import DoseSimulator from './components/DoseSimulator';
 import CleanAirMap from './components/CleanAirMap';
 import AgentDrawer from './components/AgentDrawer';
-import { fetchAtmosphere } from './lib/api';
+import { fetchAtmosphere, optimizeSchedule } from './lib/api';
 import {
   Calendar,
   Bot,
   Sparkles,
 } from 'lucide-react';
+
+const DEFAULT_TASKS = [
+  { name: 'Commute Window', activity: 'walking', duration_minutes: 40, earliest_hour: 7, latest_hour: 10 },
+  { name: 'Morning Jog', activity: 'running', duration_minutes: 30, earliest_hour: 6, latest_hour: 9 },
+  { name: 'Ventilate Bedroom', activity: 'ventilate_room', duration_minutes: 60, earliest_hour: 11, latest_hour: 15 },
+];
 
 export default function App() {
   const [activeCity, setActiveCity] = useState('Delhi');
@@ -22,8 +28,9 @@ export default function App() {
   const [atmosphere, setAtmosphere] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [scheduleData, setScheduleData] = useState(null);
 
-  // Load atmospheric state whenever coords, persona, or hasHepa changes
+  // Load atmospheric state ONLY whenever coordinates change (0 ms lag on persona switch)
   useEffect(() => {
     let isCancelled = false;
 
@@ -31,7 +38,7 @@ export default function App() {
       setLoading(true);
       setError(null);
       try {
-        const data = await fetchAtmosphere(coords.lat, coords.lon, activePersona, hasHepa);
+        const data = await fetchAtmosphere(coords.lat, coords.lon, 'healthy_adult', hasHepa);
         if (!isCancelled) {
           setAtmosphere(data);
         }
@@ -52,7 +59,36 @@ export default function App() {
     return () => {
       isCancelled = true;
     };
-  }, [coords.lat, coords.lon, activePersona, hasHepa]);
+  }, [coords.lat, coords.lon, hasHepa]);
+
+  // Compute live conflict-free schedule whenever atmosphere or persona changes
+  useEffect(() => {
+    if (!atmosphere?.forecast) return;
+    let isCancelled = false;
+
+    async function loadSchedule() {
+      try {
+        const res = await optimizeSchedule({
+          tasks: DEFAULT_TASKS,
+          lat: coords.lat,
+          lon: coords.lon,
+          persona: activePersona,
+          forecast: atmosphere.forecast,
+        });
+        if (!isCancelled) {
+          setScheduleData(res);
+        }
+      } catch (err) {
+        console.warn('Live schedule optimization warning:', err);
+      }
+    }
+
+    loadSchedule();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [atmosphere, activePersona, coords.lat, coords.lon]);
 
   const handleSelectCity = (preset) => {
     setActiveCity(preset.name);
@@ -116,12 +152,17 @@ export default function App() {
 
         {/* Section 4: 24h Conflict-Free Schedule Optimizer Slot */}
         <div className="glass-surface glass-surface-hover rounded-2xl p-6 border border-glass">
-          <div className="flex items-center justify-between pb-3 border-b border-glass">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-glass">
             <div className="flex items-center gap-2">
               <Calendar className="h-4 w-4 text-amber" />
               <h3 className="text-sm font-semibold text-white tracking-tight">
                 24-Hour Conflict-Free Schedule Optimizer
               </h3>
+              {scheduleData && (
+                <span className="rounded-full bg-emerald/15 text-emerald border border-emerald/30 px-2 py-0.5 text-[10px] font-mono font-medium">
+                  {scheduleData.total_savings_pct.toFixed(1)}% Saved ({(scheduleData.baseline_naive_dose_ug - scheduleData.total_optimized_dose_ug).toFixed(1)} µg cut)
+                </span>
+              )}
             </div>
             <button
               type="button"
@@ -138,21 +179,45 @@ export default function App() {
           </p>
 
           <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div className="rounded-xl border border-glass bg-white/[0.02] p-3">
-              <span className="text-[11px] text-slate-400">Commute Window</span>
-              <p className="font-mono text-sm font-medium text-white mt-0.5">07:00 - 10:00</p>
-              <span className="text-[10px] text-slate-500">40 min duration</span>
-            </div>
-            <div className="rounded-xl border border-glass bg-white/[0.02] p-3">
-              <span className="text-[11px] text-slate-400">Morning Jog</span>
-              <p className="font-mono text-sm font-medium text-white mt-0.5">06:00 - 09:00</p>
-              <span className="text-[10px] text-slate-500">30 min duration</span>
-            </div>
-            <div className="rounded-xl border border-glass bg-white/[0.02] p-3">
-              <span className="text-[11px] text-slate-400">Ventilate Bedroom</span>
-              <p className="font-mono text-sm font-medium text-white mt-0.5">11:00 - 15:00</p>
-              <span className="text-[10px] text-slate-500">60 min duration</span>
-            </div>
+            {scheduleData?.scheduled_tasks?.length ? (
+              scheduleData.scheduled_tasks.map((task, idx) => (
+                <div key={idx} className="rounded-xl border border-glass bg-white/[0.02] p-3 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] text-slate-400">{task.name}</span>
+                      <span className="text-[10px] font-mono text-emerald font-medium">
+                        {task.savings_pct.toFixed(0)}% cut
+                      </span>
+                    </div>
+                    <p className="font-mono text-sm font-medium text-white mt-1">
+                      {task.start_time} - {task.end_time}
+                    </p>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between text-[10px] font-mono text-slate-400 border-t border-glass/40 pt-1.5">
+                    <span>{task.duration_minutes} min duration</span>
+                    <span className="text-slate-300">{task.inhaled_dose_ug.toFixed(1)} µg dose</span>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <>
+                <div className="rounded-xl border border-glass bg-white/[0.02] p-3">
+                  <span className="text-[11px] text-slate-400">Commute Window</span>
+                  <p className="font-mono text-sm font-medium text-white mt-0.5">07:00 - 10:00</p>
+                  <span className="text-[10px] text-slate-500">40 min duration</span>
+                </div>
+                <div className="rounded-xl border border-glass bg-white/[0.02] p-3">
+                  <span className="text-[11px] text-slate-400">Morning Jog</span>
+                  <p className="font-mono text-sm font-medium text-white mt-0.5">06:00 - 09:00</p>
+                  <span className="text-[10px] text-slate-500">30 min duration</span>
+                </div>
+                <div className="rounded-xl border border-glass bg-white/[0.02] p-3">
+                  <span className="text-[11px] text-slate-400">Ventilate Bedroom</span>
+                  <p className="font-mono text-sm font-medium text-white mt-0.5">11:00 - 15:00</p>
+                  <span className="text-[10px] text-slate-500">60 min duration</span>
+                </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -173,7 +238,7 @@ export default function App() {
                 </span>
               </div>
               <p className="text-[11px] text-slate-400">
-                Gemini 2.5 Flash + Groq Llama 3.3 70B with 6 real atmospheric tools and full latency traces.
+                Gemini 2.5 Flash + Automatic Groq Failover with 6 real atmospheric tools and full latency traces.
               </p>
             </div>
           </div>
@@ -209,7 +274,7 @@ export default function App() {
 
       {/* Footer */}
       <footer className="mt-auto border-t border-glass py-4 text-center text-xs text-slate-500">
-        <p>Aether v2 — Autonomous Clinical Atmospheric & Smog Intelligence • Zero AI Slop Design</p>
+        <p>Aether v2.0 · Clinical Atmospheric Intelligence · Open-Meteo CAMS, ECMWF IFS HRES & OpenRouteService</p>
       </footer>
     </div>
   );

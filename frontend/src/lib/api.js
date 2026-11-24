@@ -96,14 +96,30 @@ export async function optimizeSchedule(payload) {
 /**
  * Glass-Box Agentic Co-pilot chat
  */
-export async function sendChatMessage(message, cityOrCoords = 'Delhi', persona = 'healthy_adult', history = []) {
-  return request('/api/agent/chat', {
-    method: 'POST',
-    body: JSON.stringify({
-      message,
+export async function sendChatMessage(messageOrPayload, cityOrCoords = 'Delhi', persona = 'healthy_adult', history = []) {
+  let body;
+  if (typeof messageOrPayload === 'object' && messageOrPayload !== null) {
+    const p = messageOrPayload;
+    body = {
+      message: p.message,
+      city_name: p.cityName || p.city_name || p.cityOrCoords,
+      city_or_coords: p.cityOrCoords || p.city_name || p.cityName || 'Delhi',
+      lat: p.lat,
+      lon: p.lon,
+      persona: p.persona || 'healthy_adult',
+      history: p.history || [],
+    };
+  } else {
+    body = {
+      message: messageOrPayload,
+      city_name: cityOrCoords,
       city_or_coords: cityOrCoords,
       persona,
       history,
-    }),
+    };
+  }
+  return request('/api/agent/chat', {
+    method: 'POST',
+    body: JSON.stringify(body),
   });
 }

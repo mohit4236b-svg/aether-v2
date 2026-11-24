@@ -9,6 +9,28 @@ OPEN_IO_RATIO: float = 0.95
 HEPA_REDUCTION: float = 0.60
 
 
+def _format_readable_hour(iso_str: str | None) -> str:
+    """Format an ISO timestamp like '2026-11-24T15:00:00' to human-readable '3:00 PM'."""
+    if not iso_str:
+        return "N/A"
+    try:
+        iso_clean = iso_str.replace("Z", "")
+        dt = datetime.fromisoformat(iso_clean)
+        return dt.strftime("%I:%M %p").lstrip("0")
+    except Exception:  # noqa: BLE001
+        if "T" in iso_str:
+            time_part = iso_str.split("T")[-1]
+            parts = time_part.split(":")
+            h = int(parts[0])
+            m = parts[1] if len(parts) > 1 else "00"
+            period = "AM" if h < 12 else "PM"
+            h12 = h % 12
+            if h12 == 0:
+                h12 = 12
+            return f"{h12}:{m} {period}"
+        return iso_str
+
+
 def _parse_hour(time_str: str) -> int:
     """Extract integer hour from ISO string or time string."""
     try:
@@ -81,14 +103,15 @@ def find_optimal_ventilation_window(
     indoor_pm25_open = round(outdoor_pm25_min * OPEN_IO_RATIO, 2)
 
     # Formulate clinical/environmental recommendation
+    start_readable = _format_readable_hour(best_start)
     if outdoor_pm25_min <= 15.0:
         recommendation = (
-            f"Excellent window for natural ventilation at {best_start}. Outdoor PM2.5 drops to "
+            f"Excellent window for natural ventilation at {start_readable}. Outdoor PM2.5 drops to "
             f"{outdoor_pm25_min:.1f} µg/m³. Safe to air out indoor living spaces."
         )
     elif outdoor_pm25_min <= 35.0:
         recommendation = (
-            f"Moderate outdoor air quality at {best_start} ({outdoor_pm25_min:.1f} µg/m³). Brief 15-minute "
+            f"Moderate outdoor air quality at {start_readable} ({outdoor_pm25_min:.1f} µg/m³). Brief 15-minute "
             f"cross-ventilation permissible if indoor CO2 is elevated, then close windows."
         )
     else:

@@ -25,9 +25,25 @@ from api.services.schedule_solver import TaskItem, solve_schedule
 
 logger = logging.getLogger("aether.ai_agent")
 
-SYSTEM_PROMPT: str = """You are Aether v2, an authoritative clinical and atmospheric health co-pilot.
-CRITICAL MANDATE: You must NEVER invent, hallucinate, or estimate numbers. You MUST ALWAYS call the provided tools and cite the exact figures returned by the tool outputs (such as PM2.5 concentrations in µg/m³, Ventilation Index in m²/s, inhaled dose in µg, WHO reference budget percentages, and optimal schedule slots).
-Be concise, scientific, clinical, and directly actionable."""
+
+def build_system_prompt(
+    city_name: str = "Delhi",
+    lat: float = 28.6139,
+    lon: float = 77.2090,
+    persona: str = "healthy_adult",
+) -> str:
+    """Construct authoritative system prompt with injected active location and persona."""
+    return (
+        "You are Aether v2, an authoritative clinical and atmospheric health co-pilot.\n"
+        f"Active Location: {city_name} ({lat}, {lon}) | Active Persona: {persona}\n\n"
+        "CRITICAL MANDATES:\n"
+        "1. NEVER ask the user for their city or coordinates if Active Location is already provided; immediately call your tools using those coordinates.\n"
+        "2. You must NEVER invent, hallucinate, or estimate numbers. You MUST ALWAYS call the provided tools and cite the exact figures returned by the tool outputs (such as PM2.5 concentrations in µg/m³, Ventilation Index in m²/s, inhaled dose in µg, WHO reference budget percentages, and optimal schedule slots).\n"
+        "3. Be concise, scientific, clinical, and directly actionable."
+    )
+
+
+SYSTEM_PROMPT: str = build_system_prompt()
 
 # --- 6 Typed Tools ---
 
@@ -391,9 +407,14 @@ GROQ_TOOLS: list[dict[str, Any]] = [
 
 async def _run_gemini(
     message: str,
+    city_name: str,
+    lat: float,
+    lon: float,
+    persona: str,
+    history: list[dict[str, Any]],
     tool_trace: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Execute query with Google GenAI SDK (gemini-2.5-flash)."""
+    """Execute query with Google GenAI SDK (gemini-2.5-flash / gemini-3.8-flash)."""
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
         raise ValueError("GEMINI_API_KEY missing")
@@ -406,6 +427,8 @@ async def _run_gemini(
         http_options=types.HttpOptions(api_version="v1beta"),
     )
 
+    system_prompt = build_system_prompt(city_name, lat, lon, persona)
+
     # Convert our python tools to types.Tool
     tools = [
         fetch_atmospheric_state,
@@ -417,7 +440,7 @@ async def _run_gemini(
     ]
 
     config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT,
+        system_instruction=system_prompt,
         tools=tools,  # type: ignore[arg-type]
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
     )
@@ -437,7 +460,9 @@ async def _run_gemini(
         return res
 
     models_to_try = [
+        "gemini-2.5-flash",
         "gemini-3.8-flash",
+        "gemini-2.0-flash",
     ]
     response = None
     chosen_model = models_to_try[0]
@@ -465,13 +490,19 @@ async def _run_gemini(
         for call in response.function_calls:
             call_name = getattr(call, "name", "")
             call_args = dict(getattr(call, "args", {}) or {})
+            if "lat" in call_args and call_args["lat"] is None:
+                call_args["lat"] = lat
+            if "lon" in call_args and call_args["lon"] is None:
+                call_args["lon"] = lon
+            if "city_or_coords" in call_args and not call_args["city_or_coords"]:
+                call_args["city_or_coords"] = city_name
             await _execute_and_trace(call_name, call_args, tool_trace)
 
         # Call again with tool outputs for final synthesized text
         follow_up = await _generate(
             chosen_model,
             f"User query: {message}. Tool execution trace: {json.dumps(tool_trace)}. Summarize citing exact numbers.",
-            types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
+            types.GenerateContentConfig(system_instruction=system_prompt),
         )
         return {
             "reply": getattr(follow_up, "text", "") or "Analysis complete.",
@@ -488,6 +519,11 @@ async def _run_gemini(
 
 async def _run_groq(
     message: str,
+    city_name: str,
+    lat: float,
+    lon: float,
+    persona: str,
+    history: list[dict[str, Any]],
     tool_trace: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Execute query with Groq (openai/gpt-oss-120b with fallback to openai/gpt-oss-20b) tool calling."""
@@ -499,10 +535,19 @@ async def _run_groq(
 
     client = AsyncGroq(api_key=groq_key)
 
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": message},
+    system_prompt = build_system_prompt(city_name, lat, lon, persona)
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": system_prompt},
     ]
+
+    if history:
+        for turn in history[-6:]:
+            role = turn.get("role", "user")
+            content = turn.get("content", "")
+            if role in ["user", "assistant"] and content:
+                messages.append({"role": role, "content": str(content)})
+
+    messages.append({"role": "user", "content": message})
 
     models_to_try = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
     resp = None
@@ -572,6 +617,13 @@ async def _run_groq(
             except (ValueError, TypeError):
                 fargs = {}
 
+            if "lat" in fargs and (fargs["lat"] is None or fargs["lat"] == 0):
+                fargs["lat"] = lat
+            if "lon" in fargs and (fargs["lon"] is None or fargs["lon"] == 0):
+                fargs["lon"] = lon
+            if "city_or_coords" in fargs and not fargs["city_or_coords"]:
+                fargs["city_or_coords"] = city_name
+
             t_result = await _execute_and_trace(fname, fargs, tool_trace)
             messages.append(
                 {
@@ -590,7 +642,9 @@ async def _run_groq(
 
 async def _run_deterministic_fallback(
     message: str,
-    city_or_coords: str,
+    city_name: str,
+    lat: float,
+    lon: float,
     persona: str,
     tool_trace: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -598,14 +652,43 @@ async def _run_deterministic_fallback(
     msg_lower = message.lower()
     schedule_data: dict[str, Any] | None = None
 
+    if "compare" in msg_lower and any(w in msg_lower for w in ["mask", "jog", "run", "walk", "dose"]):
+        atm = await _execute_and_trace("fetch_atmospheric_state", {"city_or_coords": f"{lat},{lon}"}, tool_trace)
+        pm25 = float(atm.get("current_pm25_ug_m3", 100.0))
+
+        dose_now = await _execute_and_trace(
+            "simulate_inhaled_dose",
+            {"pm25": pm25, "activity": "running" if "jog" in msg_lower or "run" in msg_lower else "walking", "duration_minutes": 30.0, "mask": "none", "persona": persona},
+            tool_trace,
+        )
+        dose_n95 = await _execute_and_trace(
+            "simulate_inhaled_dose",
+            {"pm25": pm25, "activity": "running" if "jog" in msg_lower or "run" in msg_lower else "walking", "duration_minutes": 30.0, "mask": "n95", "mask_fit": "sealed", "persona": persona},
+            tool_trace,
+        )
+        dep_now = max(0.1, float(dose_now.get("deposited_dose_ug", 1.0)))
+        dep_n95 = float(dose_n95.get("deposited_dose_ug", 0.0))
+        pct_cut = max(0.0, round((1.0 - dep_n95 / dep_now) * 100.0, 1))
+
+        reply = (
+            f"Dose Comparison for 30-min run in {city_name} (Current PM2.5: {pm25:.1f} µg/m³):\n"
+            f"• Unmasked Now: Inhaled dose {dose_now.get('inhaled_dose_ug', 0.0):.1f} µg "
+            f"({dose_now.get('who_daily_budget_pct', 0.0):.1f}% WHO 24h budget, {dose_now.get('cigarette_equivalent', 0.0):.2f} cigs eq, "
+            f"{dose_now.get('deposited_dose_ug', 0.0):.1f} µg deposited in lungs).\n"
+            f"• N95 Masked at 4 PM: Inhaled dose {dose_n95.get('inhaled_dose_ug', 0.0):.1f} µg "
+            f"({dose_n95.get('who_daily_budget_pct', 0.0):.1f}% WHO 24h budget, {dose_n95.get('cigarette_equivalent', 0.0):.2f} cigs eq, "
+            f"{dose_n95.get('deposited_dose_ug', 0.0):.1f} µg deposited).\n"
+            f"Wearing a sealed N95 mask delivers a {pct_cut:.1f}% reduction in alveolar particulate deposition."
+        )
+
     # Intent routing
-    if any(k in msg_lower for k in ["route", "path", "clean air", "cycling", "drive", "footway"]):
-        origin = (28.6139, 77.2090)
-        destination = (28.6500, 77.2300)
+    elif any(k in msg_lower for k in ["route", "path", "clean air", "cycling", "drive", "footway"]):
+        origin = (lat, lon)
+        destination = (round(lat + 0.03, 4), round(lon + 0.03, 4))
         mode = "cycling" if "cycl" in msg_lower else "walking"
         res = await _execute_and_trace(
             "compare_clean_air_routes",
-            {"origin": origin, "destination": destination, "mode": mode, "persona": persona},
+            {"origin": origin, "destination": destination, "mode": mode, "lat": lat, "lon": lon, "persona": persona},
             tool_trace,
         )
         fastest_id = res.get("fastest_route_id")
@@ -625,7 +708,7 @@ async def _run_deterministic_fallback(
         ]
         res = await _execute_and_trace(
             "optimize_daily_schedule",
-            {"lat": 28.6139, "lon": 77.2090, "tasks": tasks, "persona": persona},
+            {"lat": lat, "lon": lon, "tasks": tasks, "persona": persona},
             tool_trace,
         )
         schedule_data = res
@@ -636,7 +719,7 @@ async def _run_deterministic_fallback(
         )
 
     elif any(k in msg_lower for k in ["smog", "trap", "inversion", "lift", "boundary"]):
-        res = await _execute_and_trace("analyze_smog_trap", {"lat": 28.6139, "lon": 77.2090}, tool_trace)
+        res = await _execute_and_trace("analyze_smog_trap", {"lat": lat, "lon": lon}, tool_trace)
         reply = (
             f"Smog Inversion Analysis: Ventilation Index is {res.get('ventilation_index_m2_s', 0.0):.1f} m²/s "
             f"({res.get('status', 'unknown')}). {res.get('explanation', '')}"
@@ -645,7 +728,7 @@ async def _run_deterministic_fallback(
     elif any(k in msg_lower for k in ["window", "ventilate", "ventilation", "bedroom", "air out", "hepa"]):
         res = await _execute_and_trace(
             "optimize_window_ventilation",
-            {"lat": 28.6139, "lon": 77.2090, "has_hepa": "hepa" in msg_lower},
+            {"lat": lat, "lon": lon, "has_hepa": "hepa" in msg_lower},
             tool_trace,
         )
         reply = (
@@ -656,9 +739,11 @@ async def _run_deterministic_fallback(
         )
 
     elif any(k in msg_lower for k in ["dose", "inhale", "mask", "cigarette", "copd", "asthma"]):
+        atm = await _execute_and_trace("fetch_atmospheric_state", {"city_or_coords": f"{lat},{lon}"}, tool_trace)
+        curr_pm = float(atm.get("current_pm25_ug_m3", 100.0))
         res = await _execute_and_trace(
             "simulate_inhaled_dose",
-            {"pm25": 120.0, "activity": "walking", "duration_minutes": 60.0, "persona": persona},
+            {"pm25": curr_pm, "activity": "walking", "duration_minutes": 60.0, "persona": persona},
             tool_trace,
         )
         reply = (
@@ -669,9 +754,9 @@ async def _run_deterministic_fallback(
         )
 
     else:
-        res = await _execute_and_trace("fetch_atmospheric_state", {"city_or_coords": city_or_coords}, tool_trace)
+        res = await _execute_and_trace("fetch_atmospheric_state", {"city_or_coords": f"{lat},{lon}"}, tool_trace)
         reply = (
-            f"Atmospheric State for {res.get('city_or_coords', 'Delhi')}: Current PM2.5 is "
+            f"Atmospheric State for {city_name}: Current PM2.5 is "
             f"{res.get('current_pm25_ug_m3', 0.0):.1f} µg/m³, NO2 is {res.get('current_no2_ug_m3', 0.0):.1f} µg/m³, "
             f"O3 is {res.get('current_o3_ug_m3', 0.0):.1f} µg/m³, BLH is {res.get('boundary_layer_height_m', 0.0):.1f} m, "
             f"and wind speed is {res.get('wind_speed_kmh', 0.0):.1f} km/h."
@@ -687,24 +772,61 @@ async def _run_deterministic_fallback(
 
 async def run_copilot(
     message: str,
-    city_or_coords: str = "Delhi",
+    city_name: str = "Delhi",
+    lat: float = 28.6139,
+    lon: float = 77.2090,
     persona: str = "healthy_adult",
-    history: list[dict[str, str]] | None = None,
+    history: list[dict[str, Any]] | None = None,
+    city_or_coords: str | None = None,
 ) -> dict[str, Any]:
     """Execute Glass-Box Copilot with Dual-LLM Failover and Deterministic Fallback."""
     tool_trace: list[dict[str, Any]] = []
 
-    # 1. Primary: Google GenAI (gemini-3.8-flash)
+    # Handle legacy / fallback callers that pass city_or_coords
+    active_city = city_name
+    active_lat = lat
+    active_lon = lon
+    if city_or_coords and (not city_name or city_name == "Delhi"):
+        active_city = city_or_coords
+
+    if active_city in DEMO_CITIES and active_lat == 28.6139 and active_lon == 77.2090 and active_city != "Delhi":
+        active_lat = DEMO_CITIES[active_city]["lat"]
+        active_lon = DEMO_CITIES[active_city]["lon"]
+
+    # 1. Primary: Google GenAI (gemini-2.5-flash / gemini-3.8-flash)
+    gemini_error: str | None = None
     try:
-        return await asyncio.wait_for(_run_gemini(message, tool_trace), timeout=10.0)
+        return await asyncio.wait_for(
+            _run_gemini(message, active_city, active_lat, active_lon, persona, history or [], tool_trace),
+            timeout=10.0,
+        )
     except Exception as e:  # noqa: BLE001
-        logger.info("Primary Gemini failed or unavailable (%s), triggering Groq failover.", e)
+        gemini_error = f"{type(e).__name__}: {e}"
+        logger.warning(
+            "Primary Gemini failed or unavailable (%s), triggering Groq failover. Exact fallback reason: %s",
+            e,
+            gemini_error,
+        )
 
     # 2. Automatic Failover: Groq (openai/gpt-oss-120b / openai/gpt-oss-20b)
+    groq_error: str | None = None
     try:
-        return await asyncio.wait_for(_run_groq(message, tool_trace), timeout=15.0)
+        return await asyncio.wait_for(
+            _run_groq(message, active_city, active_lat, active_lon, persona, history or [], tool_trace),
+            timeout=15.0,
+        )
     except Exception as e:  # noqa: BLE001
-        logger.info("Groq failover failed or unavailable (%s), triggering deterministic fallback.", e)
+        groq_error = f"{type(e).__name__}: {e}"
+        logger.warning(
+            "Groq failover failed or unavailable (%s), triggering deterministic fallback. Exact fallback reason: %s",
+            e,
+            groq_error,
+        )
 
     # 3. Ultimate Safe Fallback: Deterministic offline execution citing exact numbers
-    return await _run_deterministic_fallback(message, city_or_coords, persona, tool_trace)
+    res = await _run_deterministic_fallback(message, active_city, active_lat, active_lon, persona, tool_trace)
+    if gemini_error:
+        res["gemini_error"] = gemini_error
+    if groq_error:
+        res["groq_error"] = groq_error
+    return res
