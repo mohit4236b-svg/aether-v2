@@ -415,9 +415,10 @@ async def _run_gemini(
     config = types.GenerateContentConfig(
         system_instruction=SYSTEM_PROMPT,
         tools=tools,  # type: ignore[arg-type]
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
     )
 
-    response = client.models.generate_content(
+    response = await client.aio.models.generate_content(
         model="gemini-2.5-flash",
         contents=message,
         config=config,
@@ -431,7 +432,7 @@ async def _run_gemini(
             await _execute_and_trace(call_name, call_args, tool_trace)
 
         # Call again with tool outputs for final synthesized text
-        follow_up = client.models.generate_content(
+        follow_up = await client.aio.models.generate_content(
             model="gemini-2.5-flash",
             contents=f"User query: {message}. Tool execution trace: {json.dumps(tool_trace)}. Summarize citing exact numbers.",
             config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
@@ -493,7 +494,26 @@ async def _run_groq(
     msg = choice.message
 
     if msg.tool_calls:
-        messages.append(msg)  # type: ignore[arg-type]
+        tool_calls_payload = []
+        for tc in msg.tool_calls:
+            if hasattr(tc, "model_dump"):
+                tool_calls_payload.append(tc.model_dump())
+            elif isinstance(tc, dict):
+                tool_calls_payload.append(tc)
+            else:
+                tool_calls_payload.append({
+                    "id": getattr(tc, "id", "call_1"),
+                    "type": "function",
+                    "function": {
+                        "name": getattr(tc.function, "name", ""),
+                        "arguments": getattr(tc.function, "arguments", "{}"),
+                    },
+                })
+        messages.append({
+            "role": "assistant",
+            "content": msg.content or "",
+            "tool_calls": tool_calls_payload,
+        })
         for t_call in msg.tool_calls:
             fname = t_call.function.name
             try:
