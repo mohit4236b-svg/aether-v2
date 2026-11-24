@@ -135,17 +135,17 @@ async def get_atmosphere(
 ) -> dict[str, Any]:
     """Return live CAMS forecast, ECMWF BLH inversion analysis, OpenAQ calibration, and IAQ window."""
     bundle = await fetch_atmospheric_bundle(lat, lon)
-    openaq_cal = await calibrate_with_openaq(lat, lon)
+    aq_hourly = bundle.get("air_quality", {}).get("hourly", {})
+    aq_times = aq_hourly.get("time", [])
+    pm25_series = aq_hourly.get("pm2_5", [])
+    current_pm25 = float(pm25_series[0]) if pm25_series else 0.0
+    openaq_cal = await calibrate_with_openaq(lat, lon, current_pm25)
 
     weather_hourly = bundle.get("weather", {}).get("hourly", {})
     w_times = weather_hourly.get("time", [])
     blh = weather_hourly.get("boundary_layer_height", [])
     wind = weather_hourly.get("wind_speed_10m", [])
     inversion_res = analyze_inversion_series(w_times, blh, wind)
-
-    aq_hourly = bundle.get("air_quality", {}).get("hourly", {})
-    aq_times = aq_hourly.get("time", [])
-    pm25_series = aq_hourly.get("pm2_5", [])
     vent_window = find_optimal_ventilation_window(aq_times, pm25_series, has_hepa=has_hepa)
 
     return {

@@ -49,7 +49,7 @@ def _extract_pm25_from_location(location: dict[str, Any]) -> float | None:
 async def calibrate_with_openaq(
     lat: float,
     lon: float,
-    cams_pm25: float,
+    cams_pm25: float = 0.0,
     client: httpx.AsyncClient | None = None,
 ) -> dict[str, Any]:
     """Query nearest ground sensor within 25km and calculate calibration offset.
