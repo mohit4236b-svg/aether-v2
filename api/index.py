@@ -88,7 +88,14 @@ class ChatRequest(BaseModel):
     history: list[dict[str, str]] = Field(default_factory=list, description="Conversation history")
 
 
+@app.get("/")
+def root_endpoint() -> dict[str, str]:
+    return {"service": "aether-v2", "status": "healthy", "docs": "/api/docs"}
+
+
 @app.get("/api/health")
+@app.get("/health")
+@app.get("/api")
 def health_check() -> dict[str, Any]:
     """Return health status, current ISO timestamp, and available providers without exposing keys."""
     return {
@@ -104,12 +111,14 @@ def health_check() -> dict[str, Any]:
 
 
 @app.get("/api/presets")
+@app.get("/presets")
 def get_presets() -> dict[str, Any]:
     """Return the 5 built-in instant demo cities and coordinates."""
     return {"presets": DEMO_CITIES}
 
 
 @app.get("/api/geocode")
+@app.get("/geocode")
 async def geocode_endpoint(q: str = Query(..., description="City or location query")) -> dict[str, Any]:
     """Geocode city or location name to coordinates."""
     results = await geocode_city(q)
@@ -117,6 +126,7 @@ async def geocode_endpoint(q: str = Query(..., description="City or location que
 
 
 @app.get("/api/atmosphere")
+@app.get("/atmosphere")
 async def get_atmosphere(
     lat: float = Query(..., ge=-90.0, le=90.0),
     lon: float = Query(..., ge=-180.0, le=180.0),
@@ -150,12 +160,14 @@ async def get_atmosphere(
 
 
 @app.post("/api/dose/simulate", response_model=DoseResponse)
+@app.post("/dose/simulate", response_model=DoseResponse)
 def simulate_dose(req: DoseRequest) -> DoseResponse:
     """Calculate respiratory inhaled and deposited PM2.5 dose via dose_engine."""
     return calculate_dose(req)
 
 
 @app.post("/api/routes/compare")
+@app.post("/routes/compare")
 async def compare_routes_endpoint(req: RouteCompareRequest) -> dict[str, Any]:
     """Compare alternative routes with Land-Use Regression and steepness multipliers."""
     res = await compare_clean_air_routes(
@@ -171,6 +183,7 @@ async def compare_routes_endpoint(req: RouteCompareRequest) -> dict[str, Any]:
 
 
 @app.post("/api/schedule/optimize")
+@app.post("/schedule/optimize")
 async def optimize_schedule_endpoint(req: ScheduleOptimizeRequest) -> dict[str, Any]:
     """Optimize 24h daily schedule minimizing cumulative PM2.5 exposure."""
     forecast_data = req.forecast
@@ -182,6 +195,7 @@ async def optimize_schedule_endpoint(req: ScheduleOptimizeRequest) -> dict[str, 
 
 
 @app.post("/api/agent/chat")
+@app.post("/agent/chat")
 async def agent_chat_endpoint(req: ChatRequest) -> dict[str, Any]:
     """Glass-Box Agentic Co-Pilot with Dual-LLM Failover and populated tool traces."""
     return await run_copilot(
