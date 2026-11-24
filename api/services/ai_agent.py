@@ -529,10 +529,25 @@ async def _run_groq(
     if resp is None:
         raise RuntimeError("No Groq model succeeded")
 
-    choice = resp.choices[0]
-    msg = choice.message
+    # Multi-turn tool execution loop (up to 5 turns)
+    reply_text = "Atmospheric assessment ready."
+    max_turns = 5
 
-    if msg.tool_calls:
+    for turn_idx in range(max_turns):
+        if turn_idx > 0:
+            resp = await client.chat.completions.create(
+                model=chosen_model,
+                messages=messages,  # type: ignore[arg-type]
+                tools=GROQ_TOOLS,  # type: ignore[arg-type]
+                tool_choice="auto",
+            )
+        choice = resp.choices[0]
+        msg = choice.message
+
+        if not msg.tool_calls:
+            reply_text = msg.content or reply_text
+            break
+
         tool_calls_payload = []
         for tc in msg.tool_calls:
             if hasattr(tc, "model_dump"):
@@ -541,7 +556,7 @@ async def _run_groq(
                 tool_calls_payload.append(tc)
             else:
                 tool_calls_payload.append({
-                    "id": getattr(tc, "id", "call_1"),
+                    "id": getattr(tc, "id", f"call_{turn_idx}"),
                     "type": "function",
                     "function": {
                         "name": getattr(tc.function, "name", ""),
@@ -568,16 +583,6 @@ async def _run_groq(
                     "content": json.dumps(t_result),
                 }  # type: ignore[dict-item]
             )
-
-        second_resp = await client.chat.completions.create(
-            model=chosen_model,
-            messages=messages,  # type: ignore[arg-type]
-            tools=GROQ_TOOLS,  # type: ignore[arg-type]
-            tool_choice="none",
-        )
-        reply_text = second_resp.choices[0].message.content or "Completed analysis."
-    else:
-        reply_text = msg.content or "Atmospheric assessment ready."
 
     return {
         "reply": reply_text,
