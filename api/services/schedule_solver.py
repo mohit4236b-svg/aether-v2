@@ -5,6 +5,7 @@ atmospheric air quality forecasts, computing respiratory dose via dose_engine
 and iaq_engine to minimize cumulative inhaled PM2.5 with zero schedule overlaps.
 """
 
+from collections.abc import Sequence
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -173,7 +174,7 @@ def _compute_dose_for_slot(
 
 
 def solve_schedule(
-    tasks: list[dict[str, Any] | TaskItem],
+    tasks: Sequence[dict[str, Any] | TaskItem],
     forecast: dict[str, Any] | None = None,
     persona: PersonaType = PersonaType.healthy_adult,
     *,

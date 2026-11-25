@@ -6,6 +6,7 @@ clean air routing, deterministic schedule optimization, and Glass-Box Agentic Co
 
 import os
 import sys
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -15,7 +16,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -42,19 +43,31 @@ app = FastAPI(
     openapi_url="/api/openapi.json",
 )
 
-# CORS configuration for local Vite development and same-origin Vercel deployments
+# CORS configuration for local Vite development and production Vercel origin
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "https://aether-v2-one.vercel.app",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "*",
     ],
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
+
+
+@app.middleware("http")
+async def add_security_headers(
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    """Attach standard HTTP security headers to all API responses."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
 
 
 class RouteCompareRequest(BaseModel):
@@ -74,20 +87,26 @@ class ScheduleOptimizeRequest(BaseModel):
 
     tasks: list[dict[str, Any]] = Field(description="List of daily tasks to optimize")
     forecast: dict[str, Any] | None = Field(default=None, description="Hourly forecast data")
-    lat: float | None = Field(default=None, description="Latitude for atmospheric forecast lookup")
-    lon: float | None = Field(default=None, description="Longitude for atmospheric forecast lookup")
+    lat: float | None = Field(
+        default=None, ge=-90.0, le=90.0, description="Latitude for atmospheric forecast lookup"
+    )
+    lon: float | None = Field(
+        default=None, ge=-180.0, le=180.0, description="Longitude for atmospheric forecast lookup"
+    )
     persona: PersonaType = Field(default=PersonaType.healthy_adult)
 
 
 class ChatRequest(BaseModel):
     """Payload for conversational Glass-Box Agent interaction."""
 
-    message: str = Field(description="User prompt or question")
-    city_name: str | None = Field(default=None, description="Active city name")
-    city_or_coords: str | None = Field(default="Delhi", description="Active geographic context fallback")
-    lat: float | None = Field(default=None, description="Active latitude")
-    lon: float | None = Field(default=None, description="Active longitude")
-    persona: str = Field(default="healthy_adult", description="Clinical persona profile")
+    message: str = Field(..., min_length=1, max_length=1000, description="User prompt or question")
+    city_name: str | None = Field(default=None, max_length=120, description="Active city name")
+    city_or_coords: str | None = Field(
+        default="Delhi", max_length=120, description="Active geographic context fallback"
+    )
+    lat: float | None = Field(default=None, ge=-90.0, le=90.0, description="Active latitude")
+    lon: float | None = Field(default=None, ge=-180.0, le=180.0, description="Active longitude")
+    persona: str = Field(default="healthy_adult", max_length=64, description="Clinical persona profile")
     history: list[dict[str, Any]] = Field(default_factory=list, description="Conversation history (last 6 turns)")
 
 
@@ -122,7 +141,9 @@ def get_presets() -> dict[str, Any]:
 
 @app.get("/api/geocode")
 @app.get("/geocode")
-async def geocode_endpoint(q: str = Query(..., description="City or location query")) -> dict[str, Any]:
+async def geocode_endpoint(
+    q: str = Query(..., min_length=1, max_length=120, description="City or location query"),
+) -> dict[str, Any]:
     """Geocode city or location name to coordinates."""
     results = await geocode_city(q)
     return {"query": q, "results": results}

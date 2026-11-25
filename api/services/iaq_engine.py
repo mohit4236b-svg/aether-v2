@@ -1,9 +1,12 @@
 """Indoor air quality (IAQ) and ventilation window optimization engine."""
 
+import logging
 from datetime import datetime
 from typing import Final
 
 from api.models.schemas import VentilationWindowResponse
+
+logger = logging.getLogger(__name__)
 
 CLOSED_IO_RATIO: Final[float] = 0.55  # Indoor/outdoor infiltration ratio with closed windows
 OPEN_IO_RATIO: Final[float] = 0.95  # Indoor/outdoor infiltration ratio with open windows
@@ -22,7 +25,8 @@ def _format_readable_hour(iso_str: str | None) -> str:
         iso_clean = iso_str.replace("Z", "")
         dt = datetime.fromisoformat(iso_clean)
         return dt.strftime("%I:%M %p").lstrip("0")
-    except Exception:  # noqa: BLE001
+    except ValueError as exc:
+        logger.warning("Falling back to manual ISO hour parsing for %r: %s", iso_str, exc)
         if "T" in iso_str:
             time_part = iso_str.split("T")[-1]
             parts = time_part.split(":")

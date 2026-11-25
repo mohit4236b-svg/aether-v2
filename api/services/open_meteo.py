@@ -47,7 +47,8 @@ def estimate_blh(
         except (ValueError, IndexError):
             hour = 12
 
-        ws_kmh = wind_speeds[i] if i < len(wind_speeds) and wind_speeds[i] is not None else 8.0
+        raw_ws = wind_speeds[i] if i < len(wind_speeds) else None
+        ws_kmh = float(raw_ws) if raw_ws is not None else 8.0
 
         # Solar diurnal convective mixing vs nocturnal thermal inversion
         if 11 <= hour <= 16:
@@ -124,7 +125,7 @@ async def geocode_city(
 
     async def _do_nominatim(c: httpx.AsyncClient) -> list[dict[str, Any]]:
         url = "https://nominatim.openstreetmap.org/search"
-        params = {
+        params: dict[str, str | int] = {
             "q": clean_query,
             "format": "json",
             "limit": 5,
@@ -203,7 +204,7 @@ async def _fetch_air_quality(
 ) -> dict[str, Any]:
     """Fetch CAMS air quality forecast."""
     url = "https://air-quality-api.open-meteo.com/v1/air-quality"
-    params = {
+    params: dict[str, str | int | float] = {
         "latitude": lat,
         "longitude": lon,
         "hourly": (
@@ -225,7 +226,7 @@ async def _fetch_ecmwf_weather(
 ) -> dict[str, Any]:
     """Fetch ECMWF IFS HRES 9km weather with boundary layer height."""
     url = "https://api.open-meteo.com/v1/ecmwf"
-    params = {
+    params: dict[str, str | int | float] = {
         "latitude": lat,
         "longitude": lon,
         "hourly": "temperature_2m,wind_speed_10m,wind_direction_10m,boundary_layer_height",
@@ -244,7 +245,7 @@ async def _fetch_standard_forecast_weather(
 ) -> dict[str, Any]:
     """Fallback weather endpoint if ECMWF fails or omits boundary_layer_height."""
     url = "https://api.open-meteo.com/v1/forecast"
-    params = {
+    params: dict[str, str | int | float] = {
         "latitude": lat,
         "longitude": lon,
         "hourly": "temperature_2m,wind_speed_10m,wind_direction_10m",
@@ -278,14 +279,16 @@ async def fetch_atmospheric_bundle(
         aq_task = _fetch_air_quality(lat, lon, c)
         ecmwf_task = _fetch_ecmwf_weather(lat, lon, c)
 
-        aq_res, ecmwf_res = await asyncio.gather(
+        gather_results = await asyncio.gather(
             aq_task,
             ecmwf_task,
             return_exceptions=True,
         )
+        aq_res = gather_results[0]
+        ecmwf_res = gather_results[1]
 
         # Process Air Quality result
-        if isinstance(aq_res, Exception):
+        if isinstance(aq_res, BaseException):
             raise aq_res
         aq_data: dict[str, Any] = aq_res
 
@@ -294,7 +297,7 @@ async def fetch_atmospheric_bundle(
         blh_source: str = "ecmwf_ifs_hres"
 
         has_valid_blh = False
-        if not isinstance(ecmwf_res, Exception):
+        if not isinstance(ecmwf_res, BaseException):
             weather_data = ecmwf_res
             blh_series = weather_data.get("hourly", {}).get("boundary_layer_height")
             if blh_series and any(b is not None for b in blh_series):

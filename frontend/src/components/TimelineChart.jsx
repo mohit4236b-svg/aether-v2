@@ -1,4 +1,3 @@
-import React from 'react';
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -53,6 +52,10 @@ function CustomTooltip({ active, payload, label }) {
   );
 }
 
+/**
+ * 24-hour diurnal chart comparing CAMS PM2.5 concentration and ECMWF boundary layer height.
+ * @param {{ atmosphere: object | null, loading: boolean }} props
+ */
 export default function TimelineChart({ atmosphere, loading }) {
   if (loading || !atmosphere) {
     return <div className="glass-surface h-72 rounded-2xl animate-pulse" />;
@@ -110,7 +113,11 @@ export default function TimelineChart({ atmosphere, loading }) {
         </div>
       </div>
 
-      <div className="h-64 w-full">
+      <div
+        role="region"
+        aria-label="24-hour diurnal PM2.5 and boundary layer height chart"
+        className="h-64 w-full"
+      >
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={chartData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
             <defs>

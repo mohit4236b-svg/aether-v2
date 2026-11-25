@@ -62,7 +62,7 @@ async def calibrate_with_openaq(
         return dict(DEFAULT_UNAVAILABLE_RESPONSE)
 
     url = "https://api.openaq.org/v3/locations"
-    params = {
+    params: dict[str, str | int] = {
         "coordinates": f"{lat},{lon}",
         "radius": 25000,
         "limit": 5,
