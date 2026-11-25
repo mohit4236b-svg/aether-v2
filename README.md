@@ -1,5 +1,8 @@
 # Aether v2 — Autonomous Clinical Atmospheric & Smog Intelligence Platform
 
+- **Live Production App:** https://aether-v2-one.vercel.app
+- **Demo Video (v3 Launch Film):** https://drive.google.com/file/d/1RIpN43GgUsAo2tLVI1A5QK9Zk8NMVQuT/view?usp=drivesdk
+
 > **Aether v2** is an autonomous clinical atmospheric intelligence platform. It bridges global meteorological reanalysis models with individualized respiratory exposure, street-level Land-Use Regression (LUR) routing, thermal inversion detection, and a deterministic 24-hour conflict-free schedule optimizer.
 
 ---
