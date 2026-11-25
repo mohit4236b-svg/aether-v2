@@ -11,8 +11,8 @@
 
 ### The Failure of Traditional AQI
 Air Quality Index (AQI) reports a single, static integer for entire metropolitan regions. However:
-1. **Ambient Concentration $\neq$ Personal Biometric Dose:** Ambient concentration ($\mu\text{g}/\text{m}^3$) measures what is in the sky, not what reaches your lungs. A marathon runner breathing $3.2\,\text{m}^3/\text{hr}$ inhales nearly **seven times** more particulate mass than a sedentary person ($0.48\,\text{m}^3/\text{hr}$) in the exact same air.
-2. **Resolution Blind Spots (The 45 km Problem):** Global atmospheric chemistry models (e.g., Copernicus CAMS) operate on $45\,\text{km} \times 45\,\text{km}$ grid cells. Sampling 10 points along a $5\,\text{km}$ urban commute returns identical background values, ignoring micro-scale street canyon effects where diesel corridors have $>300\%$ higher particulate concentrations than parallel park paths.
+1. **Ambient Concentration ≠ Personal Biometric Dose:** Ambient concentration (`µg/m³`) measures what is in the sky, not what reaches your lungs. A marathon runner breathing `3.2 m³/hr` inhales nearly **seven times** more particulate mass than a sedentary person (`0.48 m³/hr`) in the exact same air.
+2. **Resolution Blind Spots (The 45 km Problem):** Global atmospheric chemistry models (e.g., Copernicus CAMS) operate on `45 km × 45 km` grid cells. Sampling 10 points along a `5 km` urban commute returns identical background values, ignoring micro-scale street canyon effects where diesel corridors have `>300%` higher particulate concentrations than parallel park paths.
 3. **Thermal Inversion Trapping:** High ground-level pollution frequently coincides with shallow nocturnal planetary boundary layers. Standard weather apps fail to advise citizens *when* thermal caps will lift or *when* indoor natural ventilation is clinically safe.
 
 Aether v2 transforms air quality management from passive monitoring into an **active clinical defense system**.
@@ -24,48 +24,64 @@ Aether v2 transforms air quality management from passive monitoring into an **ac
 ### A. Personalized Inhaled & Alveolar Deposited Dose
 Respiratory exposure is computed deterministically across 5 clinical persona profiles and 4 physical activity tiers:
 
-$$\text{Inhaled Dose } (\mu\text{g}) = \text{PM}_{2.5} \times V_{E,\text{effective}} \times t \times (1.0 - E_{\text{mask}} \times F_{\text{fit}})$$
+$$
+\text{Inhaled Dose (µg)} = \text{PM}_{2.5} \times V_{E,\text{effective}} \times t \times (1.0 - E_{\text{mask}} \times F_{\text{fit}})
+$$
 
-$$\text{Deposited Dose } (\mu\text{g}) = \text{Inhaled Dose } (\mu\text{g}) \times \text{DF}$$
+$$
+\text{Deposited Dose (µg)} = \text{Inhaled Dose (µg)} \times \text{DF}
+$$
 
 Where:
-- $V_{E,\text{base}}$ minute ventilation: Resting ($0.48\,\text{m}^3/\text{hr}$), Walking ($1.20\,\text{m}^3/\text{hr}$), Cycling ($2.70\,\text{m}^3/\text{hr}$), Running ($3.20\,\text{m}^3/\text{hr}$).
-- Persona multiplier $M_{\text{persona}}$: Healthy Adult ($1.0\times$), Child ($1.35\times$), Endurance Athlete ($1.25\times$), Elderly ($0.95\times$), Asthma/COPD ($1.0\times$).
-- Mask efficiency $E_{\text{mask}}$: None ($0\%$), Cloth ($30\%$), Surgical ($65\%$), N95 ($95\%$).
-- Fit factor $F_{\text{fit}}$: Sealed ($1.00$), Loose ($0.72$).
+- `VE,base` minute ventilation: Resting (`0.48 m³/hr`), Walking (`1.20 m³/hr`), Cycling (`2.70 m³/hr`), Running (`3.20 m³/hr`).
+- Persona multiplier `M_persona`: Healthy Adult (`1.0×`), Child (`1.35×`), Endurance Athlete (`1.25×`), Elderly (`0.95×`), Asthma/COPD (`1.0×`).
+- Mask efficiency `E_mask`: None (`0%`), Cloth (`30%`), Surgical (`65%`), N95 (`95%`).
+- Fit factor `F_fit`: Sealed (`1.00`), Loose (`0.72`).
 
 ### B. Oronasal Breathing Switch Threshold
-When effective minute ventilation exceeds $2.1\,\text{m}^3/\text{hr}$ ($35\,\text{L/min}$), human respiration automatically switches from nasal to oronasal breathing, bypassing the nasal filter and increasing deep lung deposition:
-- **Nasal Breathing ($V_{E,\text{effective}} < 2.1\,\text{m}^3/\text{hr}$):** Deposition Fraction $\text{DF} = 0.45$.
-- **Oronasal Switch ($V_{E,\text{effective}} \ge 2.1\,\text{m}^3/\text{hr}$):** Deposition Fraction $\text{DF} = 0.65$.
+When effective minute ventilation exceeds `2.1 m³/hr` (`35 L/min`), human respiration automatically switches from nasal to oronasal breathing, bypassing the nasal filter and increasing deep lung deposition:
+- **Nasal Breathing (`VE,effective < 2.1 m³/hr`):** Deposition Fraction `DF = 0.45`.
+- **Oronasal Switch (`VE,effective ≥ 2.1 m³/hr`):** Deposition Fraction `DF = 0.65`.
 
 ### C. Atmospheric Thermal Inversion & Ventilation Index
-Inversion trapping is evaluated using ECMWF IFS Boundary Layer Height (BLH) and $10\,\text{m}$ wind speeds:
+Inversion trapping is evaluated using ECMWF IFS Boundary Layer Height (BLH) and `10 m` wind speeds:
 
-$$\text{Ventilation Index } (\text{m}^2/\text{s}) = \text{BLH } (\text{m}) \times v_{\text{wind}, 10\text{m}} (\text{m/s})$$
+$$
+\text{Ventilation Index (m}^2/\text{s)} = \text{BLH (m)} \times v_{\text{wind}, 10\text{m}}\text{ (m/s)}
+$$
 
-- **Trapped ($\text{VI} < 1200\,\text{m}^2/\text{s}$):** Severe thermal capping; particulates accumulate near the ground.
-- **Lifting ($1200 \le \text{VI} \le 3000\,\text{m}^2/\text{s}$):** Progressive diurnal heating breaking the inversion cap.
-- **Dispersed ($\text{VI} > 3000\,\text{m}^2/\text{s}$):** Strong vertical and horizontal atmospheric mixing.
+- **Trapped (`VI < 1200 m²/s`):** Severe thermal capping; particulates accumulate near the ground.
+- **Lifting (`1200 ≤ VI ≤ 3000 m²/s`):** Progressive diurnal heating breaking the inversion cap.
+- **Dispersed (`VI > 3000 m²/s`):** Strong vertical and horizontal atmospheric mixing.
 
 ### D. Street-Level Land-Use Regression (LUR) & Steepness Routing
-Macro-scale background $\text{PM}_{2.5}$ is modulated per route segment via OpenRouteService (ORS) waytypes:
-- **Primary / Arterial Road (`waytype 1, 2`):** $\times 1.40$
-- **Secondary Street (`waytype 3`):** $\times 1.10$
-- **Residential / Unpaved (`waytype 4, 5`):** $\times 0.82$
-- **Cycleway / Footway / Park Path (`waytype 6, 7, 8`):** $\times 0.65$
-- **Uphill Steepness Ventilation Penalty (Walking/Cycling):** Flat/Downhill ($1.0\times$), Moderate Uphill ($1.15\times$), Steep Uphill ($1.35\times$).
-- **Safe Fallback:** OSRM step keyword inference (`highway/NH/ring road` $\to 1.38$, `park/lane/sector` $\to 0.75$).
+Macro-scale background PM2.5 is modulated per route segment via OpenRouteService (ORS) waytypes:
+- **Primary / Arterial Road (`waytype 1, 2`):** `× 1.40`
+- **Secondary Street (`waytype 3`):** `× 1.10`
+- **Residential / Unpaved (`waytype 4, 5`):** `× 0.82`
+- **Cycleway / Footway / Park Path (`waytype 6, 7, 8`):** `× 0.65`
+- **Uphill Steepness Ventilation Penalty (Walking/Cycling):** Flat/Downhill (`1.0×`), Moderate Uphill (`1.15×`), Steep Uphill (`1.35×`).
+- **Safe Fallback:** OSRM step keyword inference (`highway/NH/ring road` → `1.38`, `park/lane/sector` → `0.75`).
 
 ### E. Indoor-Outdoor Infiltration (IAQ Engine)
-- **Closed Envelope:** $\text{PM}_{2.5,\text{in}} = \text{PM}_{2.5,\text{out}} \times 0.55 \times (1.0 - 0.60_{\text{HEPA}})$.
-- **Open Windows:** $\text{PM}_{2.5,\text{in}} = \text{PM}_{2.5,\text{out}} \times 0.95$.
-- **Ventilation Window:** Scans daylight hours ($06:00\text{--}22:00$) for the lowest $1$-hour outdoor $\text{PM}_{2.5}$ window.
+- **Closed Envelope:**
+
+$$
+\text{PM}_{2.5,\text{in}} = \text{PM}_{2.5,\text{out}} \times 0.55 \times (1.0 - 0.60_{\text{HEPA}})
+$$
+
+- **Open Windows:**
+
+$$
+\text{PM}_{2.5,\text{in}} = \text{PM}_{2.5,\text{out}} \times 0.95
+$$
+
+- **Ventilation Window:** Scans daylight hours (`06:00–22:00`) for the lowest 1-hour outdoor PM2.5 window.
 
 ### F. Deterministic 24-Hour Conflict-Free Schedule Optimizer
 - Sorts tasks by tightest time window slack first.
-- Evaluates candidate $5$-minute start slots against piecewise integrated 24-hour diurnal $\text{PM}_{2.5}$.
-- Selects the global minimum-exposure slot and reserves non-overlapping intervals, guaranteeing **zero schedule collisions** and $\text{Total Optimized Dose} \le \text{Naive Baseline Dose}$.
+- Evaluates candidate 5-minute start slots against piecewise integrated 24-hour diurnal PM2.5.
+- Selects the global minimum-exposure slot and reserves non-overlapping intervals, guaranteeing **zero schedule collisions** and `Total Optimized Dose ≤ Naive Baseline Dose`.
 
 ---
 
@@ -143,7 +159,10 @@ npm --prefix frontend run dev
 ### Running Automated Test Suite
 
 ```bash
-# Run all 42 unit and integration tests
+# Install dev & test dependencies (pytest, pytest-asyncio, ruff)
+pip install -r requirements-dev.txt
+
+# Run all 44 unit and integration tests
 pytest tests/ -v
 
 # Run linter and type-safety verification
@@ -154,9 +173,9 @@ ruff check api/ tests/
 
 ## 4. Assumptions & Citations
 
-1. **Copernicus Atmosphere Monitoring Service (CAMS):** Reanalysis and forecast data at $45\,\text{km}$ global resolution (and $11\,\text{km}$ European regional resolution) via Open-Meteo Air Quality API.
-2. **European Centre for Medium-Range Weather Forecasts (ECMWF):** Integrated Forecasting System (IFS HRES) $0.1^\circ$ Boundary Layer Height ($\text{BLH}$) and surface $10\,\text{m}$ wind vectors for atmospheric dispersion computation.
-3. **OpenAQ v3 API:** Universal ground-truth reference monitoring station calibration and spatial delta adjustment within a $25\,\text{km}$ radius.
+1. **Copernicus Atmosphere Monitoring Service (CAMS):** Reanalysis and forecast data at `45 km` global resolution (and `11 km` European regional resolution) via Open-Meteo Air Quality API.
+2. **European Centre for Medium-Range Weather Forecasts (ECMWF):** Integrated Forecasting System (IFS HRES) `0.1°` Boundary Layer Height (`BLH`) and surface `10 m` wind vectors for atmospheric dispersion computation.
+3. **OpenAQ v3 API:** Universal ground-truth reference monitoring station calibration and spatial delta adjustment within a `25 km` radius.
 4. **OpenRouteService (HeiGIT):** OpenStreetMap-derived micro-segment annotations including `waytype` classifications and `steepness` hierarchical categories.
-5. **WHO 2021 Global Air Quality Guidelines:** World Health Organization 24-hour mean guideline limit of $15\,\mu\text{g}/\text{m}^3$ $\text{PM}_{2.5}$, establishing the baseline daily reference budget ($172.8\,\mu\text{g}/\text{day}$ at resting inhalation).
-6. **Berkeley Earth Cigarette Equivalence Model:** Rule of thumb establishing that 24-hour continuous exposure to $22\,\mu\text{g}/\text{m}^3$ $\text{PM}_{2.5}$ delivers an inhaled particulate burden equivalent to smoking approximately $1$ cigarette ($528\,\mu\text{g}$ cumulative inhaled intake).
+5. **WHO 2021 Global Air Quality Guidelines:** World Health Organization 24-hour mean guideline limit of `15 µg/m³` PM2.5, establishing the baseline daily reference budget (`172.8 µg/day` at resting inhalation).
+6. **Berkeley Earth Cigarette Equivalence Model:** Rule of thumb establishing that 24-hour continuous exposure to `22 µg/m³` PM2.5 delivers an inhaled particulate burden equivalent to smoking approximately `1` cigarette (`528 µg` cumulative inhaled intake).
