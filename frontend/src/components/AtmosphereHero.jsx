@@ -149,7 +149,11 @@ export default function AtmosphereHero({
     <div className="space-y-4">
       {/* High-Priority Clinical Alert Banner if thresholds breached */}
       {triggeredAlerts.length > 0 && (
-        <div className="flex flex-col gap-2 rounded-xl border border-crimson/30 bg-crimson/10 p-3.5 text-xs text-rose-200 backdrop-blur-md">
+        <div
+          role="alert"
+          aria-live="polite"
+          className="flex flex-col gap-2 rounded-xl border border-crimson/30 bg-crimson/10 p-3.5 text-xs text-rose-200 backdrop-blur-md"
+        >
           {triggeredAlerts.map((alt, idx) => (
             <div key={idx} className="flex items-start gap-2.5">
               <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-crimson" />

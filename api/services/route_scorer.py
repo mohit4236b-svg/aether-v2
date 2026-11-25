@@ -6,7 +6,7 @@ ventilation adjustments, with safe fallback to OSRM when ORS API key is missing 
 
 import math
 import os
-from typing import Any
+from typing import Any, Final
 
 import httpx
 from pydantic import BaseModel, Field
@@ -21,8 +21,26 @@ from api.models.schemas import (
 )
 from api.services.dose_engine import calculate_dose
 
+# LUR waytype & steepness physical multipliers (dimensionless)
+WAYTYPE_MULTIPLIERS: Final[dict[int, float]] = {
+    1: 1.40,  # State / Primary arterial road
+    2: 1.40,  # Primary road
+    3: 1.10,  # Secondary street
+    4: 0.82,  # Residential road
+    5: 0.82,  # Unpaved / Track
+    6: 0.65,  # Cycleway
+    7: 0.65,  # Footway
+    8: 0.65,  # Park path
+}
+DEFAULT_LUR_MULTIPLIER: Final[float] = 1.00  # Baseline background multiplier
+MODERATE_UPHILL_MULTIPLIER: Final[float] = 1.15  # Ventilation penalty for 1-2 steepness
+STEEP_UPHILL_MULTIPLIER: Final[float] = 1.35  # Ventilation penalty for 3-5 steepness
+OSRM_HIGH_EMISSION_MULTIPLIER: Final[float] = 1.38  # Arterial / highway OSRM fallback
+OSRM_LOW_EMISSION_MULTIPLIER: Final[float] = 0.75  # Park / lane / greenway OSRM fallback
+OSRM_STREET_MULTIPLIER: Final[float] = 1.10  # Standard urban street OSRM fallback
+
 # ORS Profile mapping
-ORS_MODE_MAP: dict[str, str] = {
+ORS_MODE_MAP: Final[dict[str, str]] = {
     "walking": "foot-walking",
     "cycling": "cycling-regular",
     "driving": "driving-car",
@@ -32,7 +50,7 @@ ORS_MODE_MAP: dict[str, str] = {
 }
 
 # Mode to respiratory activity mapping
-ACTIVITY_MODE_MAP: dict[str, ActivityType] = {
+ACTIVITY_MODE_MAP: Final[dict[str, ActivityType]] = {
     "walking": ActivityType.walking,
     "foot-walking": ActivityType.walking,
     "cycling": ActivityType.cycling,
@@ -43,106 +61,59 @@ ACTIVITY_MODE_MAP: dict[str, ActivityType] = {
 
 
 def get_waytype_lur_multiplier(code: float | None) -> float:
-    """Segment LUR PM2.5 multipliers by ORS waytype code.
-
-    - State/Primary/Arterial road (1, 2): 1.40
-    - Secondary/Street (3): 1.10
-    - Residential/Unpaved/Track (4, 5): 0.82
-    - Cycleway/Footway/Path (6, 7, 8): 0.65
-    - Default/Unknown: 1.00
-    """
+    """Return segment LUR PM2.5 multiplier by ORS waytype code."""
     if code is None:
-        return 1.00
+        return DEFAULT_LUR_MULTIPLIER
     try:
         c = round(code)
     except (ValueError, TypeError):
-        return 1.00
-
-    if c in (1, 2):
-        return 1.40
-    elif c == 3:
-        return 1.10
-    elif c in (4, 5):
-        return 0.82
-    elif c in (6, 7, 8):
-        return 0.65
-    return 1.00
+        return DEFAULT_LUR_MULTIPLIER
+    return WAYTYPE_MULTIPLIERS.get(c, DEFAULT_LUR_MULTIPLIER)
 
 
 def get_steepness_multiplier(code: float | None, mode: str) -> float:
-    """Uphill Steepness ventilation multiplier by ORS steepness code.
-
-    Applied to walking and cycling only:
-    - Moderate uphill (1, 2): 1.15
-    - Steep uphill (3, 4, 5): 1.35
-    - Flat or downhill (<= 0): 1.00
-    """
+    """Return uphill steepness ventilation multiplier for walking and cycling."""
     norm_mode = mode.lower()
     if norm_mode not in ("walking", "cycling", "foot-walking", "cycling-regular"):
-        return 1.00
+        return DEFAULT_LUR_MULTIPLIER
     if code is None:
-        return 1.00
+        return DEFAULT_LUR_MULTIPLIER
     try:
         c = round(code)
     except (ValueError, TypeError):
-        return 1.00
+        return DEFAULT_LUR_MULTIPLIER
 
     if c <= 0:
-        return 1.00
-    elif c in (1, 2):
-        return 1.15
-    elif c in (3, 4, 5):
-        return 1.35
-    return 1.00
+        return DEFAULT_LUR_MULTIPLIER
+    if c in (1, 2):
+        return MODERATE_UPHILL_MULTIPLIER
+    if c in (3, 4, 5):
+        return STEEP_UPHILL_MULTIPLIER
+    return DEFAULT_LUR_MULTIPLIER
 
 
 def get_osrm_step_lur_multiplier(step: dict[str, Any]) -> float:
-    """Infer LUR multiplier from OSRM step road names and ref classes.
-
-    e.g., highway/NH/ring road -> 1.38, park/lane/sector -> 0.75.
-    """
+    """Infer LUR multiplier from OSRM step road names and ref classes."""
     name = (step.get("name") or "").lower()
     ref = (step.get("ref") or "").lower()
     combined = f"{name} {ref}".strip()
 
-    high_emission_keywords = [
-        "highway",
-        "expressway",
-        "freeway",
-        "motorway",
-        "nh",
-        "national highway",
-        "ring road",
-        "arterial",
-        "bypass",
-        "flyover",
-        "trunk",
-    ]
-    low_emission_keywords = [
-        "park",
-        "lane",
-        "sector",
-        "path",
-        "trail",
-        "greenway",
-        "residential",
-        "alley",
-        "garden",
-        "forest",
-    ]
+    high_emission_keywords = (
+        "highway", "expressway", "freeway", "motorway", "nh",
+        "national highway", "ring road", "arterial", "bypass", "flyover", "trunk",
+    )
+    low_emission_keywords = (
+        "park", "lane", "sector", "path", "trail",
+        "greenway", "residential", "alley", "garden", "forest",
+    )
 
-    for kw in high_emission_keywords:
-        if kw in combined:
-            return 1.38
-
-    for kw in low_emission_keywords:
-        if kw in combined:
-            return 0.75
-
-    if any(kw in combined for kw in ["street", "road", "marg", "avenue", "rd", "st"]):
-        return 1.10
-
-    return 1.00
+    if any(kw in combined for kw in high_emission_keywords):
+        return OSRM_HIGH_EMISSION_MULTIPLIER
+    if any(kw in combined for kw in low_emission_keywords):
+        return OSRM_LOW_EMISSION_MULTIPLIER
+    if any(kw in combined for kw in ("street", "road", "marg", "avenue", "rd", "st")):
+        return OSRM_STREET_MULTIPLIER
+    return DEFAULT_LUR_MULTIPLIER
 
 
 class RouteSegment(BaseModel):

@@ -1,4 +1,4 @@
-"""Glass-Box Agentic Co-Pilot with 6 typed tools and Dual-LLM Failover.
+"""Glass-Box Agentic Co-Pilot orchestrator with Dual-LLM Failover.
 
 Primary: google-genai SDK (gemini-2.5-flash) with native function calling.
 Automatic Failover: Groq (openai/gpt-oss-120b / openai/gpt-oss-20b) on missing key, 429, 5xx, or timeout.
@@ -6,824 +6,110 @@ Deterministic Fallback: Offline local execution citing exact figures from real t
 """
 
 import asyncio
-import json
 import logging
-import os
-import time
 from typing import Any
 
-import httpx
-
-from api.models.schemas import MaskFit, MaskType, PersonaType
-from api.services.dose_engine import calculate_dose
-from api.services.iaq_engine import find_optimal_ventilation_window
-from api.services.inversion_detector import analyze_inversion_series
-from api.services.open_meteo import DEMO_CITIES, fetch_atmospheric_bundle, geocode_city
-from api.services.openaq import calibrate_with_openaq
-from api.services.route_scorer import compare_clean_air_routes as score_routes
-from api.services.schedule_solver import TaskItem, solve_schedule
+from api.services.agent_fallback import (
+    run_deterministic_fallback as _run_deterministic_fallback,
+)
+from api.services.agent_providers import run_gemini as _run_gemini
+from api.services.agent_providers import run_groq as _run_groq
+from api.services.agent_tools import (
+    DEFAULT_LAT,
+    DEFAULT_LON,
+    GROQ_TOOLS,
+    SYSTEM_PROMPT,
+    TOOL_REGISTRY,
+    analyze_smog_trap,
+    build_system_prompt,
+    compare_clean_air_routes,
+    fetch_atmospheric_state,
+    optimize_daily_schedule,
+    optimize_window_ventilation,
+    simulate_inhaled_dose,
+)
+from api.services.agent_tools import (
+    execute_and_trace as _execute_and_trace,
+)
+from api.services.open_meteo import DEMO_CITIES
 
 logger = logging.getLogger("aether.ai_agent")
 
-
-def build_system_prompt(
-    city_name: str = "Delhi",
-    lat: float = 28.6139,
-    lon: float = 77.2090,
-    persona: str = "healthy_adult",
-) -> str:
-    """Construct authoritative system prompt with injected active location and persona."""
-    return (
-        "You are Aether v2, an authoritative clinical and atmospheric health co-pilot.\n"
-        f"Active Location: {city_name} ({lat}, {lon}) | Active Persona: {persona}\n\n"
-        "CRITICAL MANDATES:\n"
-        "1. NEVER ask the user for their city or coordinates if Active Location is already provided; immediately call your tools using those coordinates.\n"
-        "2. You must NEVER invent, hallucinate, or estimate numbers. You MUST ALWAYS call the provided tools and cite the exact figures returned by the tool outputs (such as PM2.5 concentrations in µg/m³, Ventilation Index in m²/s, inhaled dose in µg, WHO reference budget percentages, and optimal schedule slots).\n"
-        "3. Be concise, scientific, clinical, and directly actionable."
-    )
-
-
-SYSTEM_PROMPT: str = build_system_prompt()
-
-# --- 6 Typed Tools ---
-
-
-async def fetch_atmospheric_state(city_or_coords: str = "Delhi") -> dict[str, Any]:
-    """Fetch live CAMS atmospheric forecast and OpenAQ ground calibration for a city or coordinates."""
-    city_str = city_or_coords.strip() if city_or_coords else "Delhi"
-
-    lat, lon = 28.6139, 77.2090  # Default Delhi
-    if city_str in DEMO_CITIES:
-        lat = DEMO_CITIES[city_str]["lat"]
-        lon = DEMO_CITIES[city_str]["lon"]
-    elif "," in city_str:
-        try:
-            parts = city_str.split(",")
-            lat, lon = float(parts[0]), float(parts[1])
-        except (ValueError, IndexError):
-            lat, lon = 28.6139, 77.2090
-    else:
-        results = await geocode_city(city_str)
-        if results:
-            lat = results[0]["lat"]
-            lon = results[0]["lon"]
-
-    bundle = await fetch_atmospheric_bundle(lat, lon)
-    openaq_cal = await calibrate_with_openaq(lat, lon)
-
-    aq_hourly = bundle.get("air_quality", {}).get("hourly", {})
-    weather_hourly = bundle.get("weather", {}).get("hourly", {})
-
-    pm25_series = aq_hourly.get("pm2_5", [])
-    no2_series = aq_hourly.get("nitrogen_dioxide", [])
-    o3_series = aq_hourly.get("ozone", [])
-    blh_series = weather_hourly.get("boundary_layer_height", [])
-    wind_series = weather_hourly.get("wind_speed_10m", [])
-
-    curr_pm25 = float(pm25_series[0]) if pm25_series and pm25_series[0] is not None else 50.0
-    curr_no2 = float(no2_series[0]) if no2_series and no2_series[0] is not None else 20.0
-    curr_o3 = float(o3_series[0]) if o3_series and o3_series[0] is not None else 40.0
-    curr_blh = float(blh_series[0]) if blh_series and blh_series[0] is not None else 500.0
-    curr_wind = float(wind_series[0]) if wind_series and wind_series[0] is not None else 8.0
-
-    return {
-        "city_or_coords": city_str,
-        "latitude": lat,
-        "longitude": lon,
-        "current_pm25_ug_m3": round(curr_pm25, 1),
-        "current_no2_ug_m3": round(curr_no2, 1),
-        "current_o3_ug_m3": round(curr_o3, 1),
-        "boundary_layer_height_m": round(curr_blh, 1),
-        "wind_speed_kmh": round(curr_wind, 1),
-        "blh_source": bundle.get("blh_source", "ecmwf_ifs_hres"),
-        "openaq_calibrated": openaq_cal,
-    }
-
-
-async def simulate_inhaled_dose(
-    pm25: float = 100.0,
-    activity: str = "walking",
-    duration_minutes: float = 60.0,
-    mask: str = "none",
-    mask_fit: str = "sealed",
-    persona: str = "healthy_adult",
-) -> dict[str, Any]:
-    """Compute personalized inhaled dose, alveolar deposition, and clinical alerts."""
-    from api.models.schemas import ActivityType, DoseRequest
-
-    act_map = {
-        "walking": ActivityType.walking,
-        "cycling": ActivityType.cycling,
-        "running": ActivityType.running,
-        "jog": ActivityType.running,
-        "resting": ActivityType.resting,
-    }
-    act_enum = act_map.get(activity.lower(), ActivityType.walking)
-
-    mask_enum = MaskType.none
-    try:
-        mask_enum = MaskType(mask.lower())
-    except ValueError:
-        pass
-
-    fit_enum = MaskFit.sealed
-    try:
-        fit_enum = MaskFit(mask_fit.lower())
-    except ValueError:
-        pass
-
-    persona_enum = PersonaType.healthy_adult
-    try:
-        persona_enum = PersonaType(persona.lower())
-    except ValueError:
-        pass
-
-    req = DoseRequest(
-        pm25_ug_m3=float(pm25),
-        duration_hours=float(duration_minutes) / 60.0,
-        activity=act_enum,
-        persona=persona_enum,
-        mask=mask_enum,
-        mask_fit=fit_enum,
-    )
-    res = calculate_dose(req)
-    return res.model_dump()
-
-
-async def analyze_smog_trap(lat: float, lon: float) -> dict[str, Any]:
-    """Analyze atmospheric boundary layer height and ventilation index for thermal inversion trapping."""
-    bundle = await fetch_atmospheric_bundle(lat, lon)
-    weather_hourly = bundle.get("weather", {}).get("hourly", {})
-    times = weather_hourly.get("time", [])
-    blh = weather_hourly.get("boundary_layer_height", [])
-    wind = weather_hourly.get("wind_speed_10m", [])
-
-    inv = analyze_inversion_series(times, blh, wind)
-    return inv.model_dump()
-
-
-async def optimize_window_ventilation(
-    lat: float,
-    lon: float,
-    has_hepa: bool = False,
-) -> dict[str, Any]:
-    """Scan daylight hours for the lowest PM2.5 natural indoor ventilation window."""
-    bundle = await fetch_atmospheric_bundle(lat, lon)
-    aq_hourly = bundle.get("air_quality", {}).get("hourly", {})
-    times = aq_hourly.get("time", [])
-    pm25 = aq_hourly.get("pm2_5", [])
-
-    window = find_optimal_ventilation_window(times, pm25, has_hepa=has_hepa)
-    return window.model_dump()
-
-
-async def optimize_daily_schedule(
-    lat: float,
-    lon: float,
-    tasks: list[dict[str, Any]],
-    persona: str = "healthy_adult",
-) -> dict[str, Any]:
-    """Deterministic, conflict-free 24-hour schedule optimizer minimizing cumulative exposure."""
-    bundle = await fetch_atmospheric_bundle(lat, lon)
-    task_items: list[TaskItem] = []
-    for t in tasks:
-        task_items.append(
-            TaskItem(
-                name=t.get("name", "Task"),
-                activity=t.get("activity", "walking"),
-                duration_minutes=int(t.get("duration_minutes", 30)),
-                earliest_hour=float(t.get("earliest_hour", 0.0)),
-                latest_hour=float(t.get("latest_hour", 24.0)),
-                mask=MaskType(t.get("mask", "none")) if isinstance(t.get("mask"), str) else t.get("mask", MaskType.none),
-                mask_fit=MaskFit(t.get("mask_fit", "sealed")) if isinstance(t.get("mask_fit"), str) else t.get("mask_fit", MaskFit.sealed),
-            )
-        )
-
-    res = solve_schedule(tasks=task_items, forecast=bundle, persona=PersonaType(persona))
-    return res.model_dump()
-
-
-async def compare_clean_air_routes(
-    origin: tuple[float, float],
-    destination: tuple[float, float],
-    mode: str = "walking",
-    lat: float | None = None,
-    lon: float | None = None,
-    persona: str = "healthy_adult",
-    mask: str = "none",
-) -> dict[str, Any]:
-    """Evaluate alternative transit routes with LUR road type and uphill steepness multipliers."""
-    bg_pm25 = 100.0
-    if lat is not None and lon is not None:
-        bundle = await fetch_atmospheric_bundle(lat, lon)
-        series = bundle.get("air_quality", {}).get("hourly", {}).get("pm2_5", [])
-        if series and series[0] is not None:
-            bg_pm25 = float(series[0])
-
-    routes_res = await score_routes(
-        origin=origin,
-        destination=destination,
-        mode=mode,
-        background_pm25=bg_pm25,
-        persona=PersonaType(persona),
-        mask=MaskType(mask),
-    )
-    return routes_res.model_dump()
-
-
-TOOL_REGISTRY: dict[str, Any] = {
-    "fetch_atmospheric_state": fetch_atmospheric_state,
-    "simulate_inhaled_dose": simulate_inhaled_dose,
-    "analyze_smog_trap": analyze_smog_trap,
-    "optimize_window_ventilation": optimize_window_ventilation,
-    "optimize_daily_schedule": optimize_daily_schedule,
-    "compare_clean_air_routes": compare_clean_air_routes,
-}
-
-
-async def _execute_and_trace(
-    tool_name: str,
-    args: dict[str, Any],
-    tool_trace: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Execute a registered tool and record glass-box latency and summary."""
-    fn = TOOL_REGISTRY.get(tool_name)
-    if fn is None:
-        err_res = {"error": f"Tool '{tool_name}' not found."}
-        tool_trace.append(
-            {
-                "tool_name": tool_name,
-                "arguments": args,
-                "latency_ms": 0.0,
-                "result_summary": err_res,
-            }
-        )
-        return err_res
-
-    t0 = time.perf_counter()
-    try:
-        res = await fn(**args)
-    except (ValueError, TypeError, KeyError, RuntimeError, AttributeError, httpx.HTTPError) as e:
-        logger.warning("Tool execution error in %s: %s", tool_name, e)
-        res = {"error": str(e)}
-    latency = round((time.perf_counter() - t0) * 1000.0, 1)
-
-    # Concise summary for trace
-    summary: dict[str, Any] = {}
-    if isinstance(res, dict):
-        for k, v in res.items():
-            if isinstance(v, list) and len(v) > 2:
-                summary[k] = f"{len(v)} items"
-            elif isinstance(v, dict) and len(v) > 4:
-                summary[k] = f"{len(v)} keys"
-            else:
-                summary[k] = v
-    else:
-        summary = {"result": str(res)}
-
-    tool_trace.append(
-        {
-            "tool_name": tool_name,
-            "arguments": args,
-            "latency_ms": latency,
-            "result_summary": summary,
-        }
-    )
-    return res
-
-
-# Tool definitions for Groq / OpenAI-compatible function calling
-GROQ_TOOLS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "fetch_atmospheric_state",
-            "description": "Fetch live ambient PM2.5, NO2, O3, BLH, and OpenAQ sensor calibration.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "city_or_coords": {
-                        "type": "string",
-                        "description": "City name (e.g. Delhi, London) or 'lat,lon'",
-                    }
-                },
-                "required": ["city_or_coords"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "simulate_inhaled_dose",
-            "description": "Calculate respiratory inhaled and deposited PM2.5 dose in micrograms and WHO budget %.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "pm25": {"type": "number", "description": "Ambient PM2.5 in µg/m³"},
-                    "activity": {"type": "string", "enum": ["resting", "walking", "cycling", "running"]},
-                    "duration_minutes": {"type": "number", "description": "Exposure duration in minutes"},
-                    "mask": {"type": "string", "enum": ["none", "cloth", "surgical", "n95"]},
-                    "mask_fit": {"type": "string", "enum": ["sealed", "loose"]},
-                    "persona": {"type": "string", "enum": ["healthy_adult", "asthma_copd", "child_commute", "endurance_athlete", "elderly_cardio"]},
-                },
-                "required": ["pm25"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "analyze_smog_trap",
-            "description": "Detect atmospheric thermal inversion layer trapping and project lift hour.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "lat": {"type": "number"},
-                    "lon": {"type": "number"},
-                },
-                "required": ["lat", "lon"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "optimize_window_ventilation",
-            "description": "Scan daylight hours for the cleanest 1-hour natural window for indoor ventilation.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "lat": {"type": "number"},
-                    "lon": {"type": "number"},
-                    "has_hepa": {"type": "boolean"},
-                },
-                "required": ["lat", "lon"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "optimize_daily_schedule",
-            "description": "Compute conflict-free non-overlapping 24h schedule minimizing total inhaled dose.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "lat": {"type": "number"},
-                    "lon": {"type": "number"},
-                    "tasks": {
-                        "type": "array",
-                        "items": {"type": "object"},
-                        "description": "List of tasks with name, activity, duration_minutes, earliest_hour, latest_hour",
-                    },
-                    "persona": {"type": "string"},
-                },
-                "required": ["lat", "lon", "tasks"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "compare_clean_air_routes",
-            "description": "Compare travel routes using Land-Use Regression road type and uphill steepness multipliers.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "origin": {"type": "array", "items": {"type": "number"}},
-                    "destination": {"type": "array", "items": {"type": "number"}},
-                    "mode": {"type": "string", "enum": ["walking", "cycling", "driving"]},
-                    "lat": {"type": "number"},
-                    "lon": {"type": "number"},
-                    "persona": {"type": "string"},
-                    "mask": {"type": "string"},
-                },
-                "required": ["origin", "destination"],
-            },
-        },
-    },
+__all__ = [
+    "GROQ_TOOLS",
+    "SYSTEM_PROMPT",
+    "TOOL_REGISTRY",
+    "_execute_and_trace",
+    "_run_deterministic_fallback",
+    "_run_gemini",
+    "_run_groq",
+    "analyze_smog_trap",
+    "build_system_prompt",
+    "compare_clean_air_routes",
+    "fetch_atmospheric_state",
+    "optimize_daily_schedule",
+    "optimize_window_ventilation",
+    "run_copilot",
+    "simulate_inhaled_dose",
 ]
-
-
-async def _run_gemini(
-    message: str,
-    city_name: str,
-    lat: float,
-    lon: float,
-    persona: str,
-    history: list[dict[str, Any]],
-    tool_trace: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Execute query with Google GenAI SDK (gemini-2.5-flash / gemini-3.8-flash)."""
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY missing")
-
-    from google import genai
-    from google.genai import types
-
-    client = genai.Client(
-        api_key=api_key,
-        http_options=types.HttpOptions(api_version="v1beta"),
-    )
-
-    system_prompt = build_system_prompt(city_name, lat, lon, persona)
-
-    # Convert our python tools to types.Tool
-    tools = [
-        fetch_atmospheric_state,
-        simulate_inhaled_dose,
-        analyze_smog_trap,
-        optimize_window_ventilation,
-        optimize_daily_schedule,
-        compare_clean_air_routes,
-    ]
-
-    config = types.GenerateContentConfig(
-        system_instruction=system_prompt,
-        tools=tools,  # type: ignore[arg-type]
-        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-    )
-
-    async def _generate(m: str, c: Any, cfg: Any) -> Any:
-        if hasattr(client, "aio") and hasattr(client.aio, "models") and callable(client.aio.models.generate_content):
-            try:
-                res = client.aio.models.generate_content(model=m, contents=c, config=cfg)
-                if asyncio.iscoroutine(res):
-                    return await res
-                return res
-            except AttributeError:
-                pass
-        res = client.models.generate_content(model=m, contents=c, config=cfg)
-        if asyncio.iscoroutine(res):
-            return await res
-        return res
-
-    models_to_try = [
-        "gemini-2.5-flash",
-        "gemini-3.8-flash",
-        "gemini-2.0-flash",
-    ]
-    response = None
-    chosen_model = models_to_try[0]
-
-    # If unit tests mocked client.models.generate_content with side_effect
-    mock_side_effect = getattr(getattr(client.models, "generate_content", None), "side_effect", None)
-    if mock_side_effect is not None:
-        client.models.generate_content(model=chosen_model, contents=message, config=config)
-
-    for model_name in models_to_try:
-        try:
-            response = await _generate(model_name, message, config)
-            chosen_model = model_name
-            break
-        except Exception as e:
-            logger.info("Gemini model %s unavailable: %s", model_name, e)
-            if model_name == models_to_try[-1]:
-                raise
-
-    if response is None:
-        raise RuntimeError("No Gemini model succeeded")
-
-    # Process function calls if requested
-    if hasattr(response, "function_calls") and response.function_calls:
-        for call in response.function_calls:
-            call_name = getattr(call, "name", "")
-            call_args = dict(getattr(call, "args", {}) or {})
-            if "lat" in call_args and call_args["lat"] is None:
-                call_args["lat"] = lat
-            if "lon" in call_args and call_args["lon"] is None:
-                call_args["lon"] = lon
-            if "city_or_coords" in call_args and not call_args["city_or_coords"]:
-                call_args["city_or_coords"] = city_name
-            await _execute_and_trace(call_name, call_args, tool_trace)
-
-        # Call again with tool outputs for final synthesized text
-        follow_up = await _generate(
-            chosen_model,
-            f"User query: {message}. Tool execution trace: {json.dumps(tool_trace)}. Summarize citing exact numbers.",
-            types.GenerateContentConfig(system_instruction=system_prompt),
-        )
-        return {
-            "reply": getattr(follow_up, "text", "") or "Analysis complete.",
-            "provider_used": chosen_model,
-            "tool_trace": tool_trace,
-        }
-
-    return {
-        "reply": getattr(response, "text", "") or "Atmospheric assessment complete.",
-        "provider_used": chosen_model,
-        "tool_trace": tool_trace,
-    }
-
-
-async def _run_groq(
-    message: str,
-    city_name: str,
-    lat: float,
-    lon: float,
-    persona: str,
-    history: list[dict[str, Any]],
-    tool_trace: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Execute query with Groq (openai/gpt-oss-120b with fallback to openai/gpt-oss-20b) tool calling."""
-    groq_key = os.environ.get("GROQ_API_KEY", "").strip()
-    if not groq_key:
-        raise ValueError("GROQ_API_KEY missing")
-
-    from groq import AsyncGroq
-
-    client = AsyncGroq(api_key=groq_key)
-
-    system_prompt = build_system_prompt(city_name, lat, lon, persona)
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": system_prompt},
-    ]
-
-    if history:
-        for turn in history[-6:]:
-            role = turn.get("role", "user")
-            content = turn.get("content", "")
-            if role in ["user", "assistant"] and content:
-                messages.append({"role": role, "content": str(content)})
-
-    messages.append({"role": "user", "content": message})
-
-    models_to_try = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
-    resp = None
-    chosen_model = models_to_try[0]
-
-    for model_name in models_to_try:
-        try:
-            resp = await client.chat.completions.create(
-                model=model_name,
-                messages=messages,  # type: ignore[arg-type]
-                tools=GROQ_TOOLS,  # type: ignore[arg-type]
-                tool_choice="auto",
-            )
-            chosen_model = model_name
-            break
-        except Exception as e:
-            logger.warning("Groq model %s error: %s", model_name, e)
-            if model_name == models_to_try[-1]:
-                raise
-
-    if resp is None:
-        raise RuntimeError("No Groq model succeeded")
-
-    # Multi-turn tool execution loop (up to 5 turns)
-    reply_text = "Atmospheric assessment ready."
-    max_turns = 5
-
-    for turn_idx in range(max_turns):
-        if turn_idx > 0:
-            resp = await client.chat.completions.create(
-                model=chosen_model,
-                messages=messages,  # type: ignore[arg-type]
-                tools=GROQ_TOOLS,  # type: ignore[arg-type]
-                tool_choice="auto",
-            )
-        choice = resp.choices[0]
-        msg = choice.message
-
-        if not msg.tool_calls:
-            reply_text = msg.content or reply_text
-            break
-
-        tool_calls_payload = []
-        for tc in msg.tool_calls:
-            if hasattr(tc, "model_dump"):
-                tool_calls_payload.append(tc.model_dump())
-            elif isinstance(tc, dict):
-                tool_calls_payload.append(tc)
-            else:
-                tool_calls_payload.append({
-                    "id": getattr(tc, "id", f"call_{turn_idx}"),
-                    "type": "function",
-                    "function": {
-                        "name": getattr(tc.function, "name", ""),
-                        "arguments": getattr(tc.function, "arguments", "{}"),
-                    },
-                })
-        messages.append({
-            "role": "assistant",
-            "content": msg.content or "",
-            "tool_calls": tool_calls_payload,
-        })
-        for t_call in msg.tool_calls:
-            fname = t_call.function.name
-            try:
-                fargs = json.loads(t_call.function.arguments)
-            except (ValueError, TypeError):
-                fargs = {}
-
-            if "lat" in fargs and (fargs["lat"] is None or fargs["lat"] == 0):
-                fargs["lat"] = lat
-            if "lon" in fargs and (fargs["lon"] is None or fargs["lon"] == 0):
-                fargs["lon"] = lon
-            if "city_or_coords" in fargs and not fargs["city_or_coords"]:
-                fargs["city_or_coords"] = city_name
-
-            t_result = await _execute_and_trace(fname, fargs, tool_trace)
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": t_call.id,
-                    "content": json.dumps(t_result),
-                }  # type: ignore[dict-item]
-            )
-
-    return {
-        "reply": reply_text,
-        "provider_used": "groq_failover",
-        "tool_trace": tool_trace,
-    }
-
-
-async def _run_deterministic_fallback(
-    message: str,
-    city_name: str,
-    lat: float,
-    lon: float,
-    persona: str,
-    tool_trace: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Offline safe fallback: executes real tools based on user intent and cites exact figures."""
-    msg_lower = message.lower()
-    schedule_data: dict[str, Any] | None = None
-
-    if "compare" in msg_lower and any(w in msg_lower for w in ["mask", "jog", "run", "walk", "dose"]):
-        atm = await _execute_and_trace("fetch_atmospheric_state", {"city_or_coords": f"{lat},{lon}"}, tool_trace)
-        pm25 = float(atm.get("current_pm25_ug_m3", 100.0))
-
-        dose_now = await _execute_and_trace(
-            "simulate_inhaled_dose",
-            {"pm25": pm25, "activity": "running" if "jog" in msg_lower or "run" in msg_lower else "walking", "duration_minutes": 30.0, "mask": "none", "persona": persona},
-            tool_trace,
-        )
-        dose_n95 = await _execute_and_trace(
-            "simulate_inhaled_dose",
-            {"pm25": pm25, "activity": "running" if "jog" in msg_lower or "run" in msg_lower else "walking", "duration_minutes": 30.0, "mask": "n95", "mask_fit": "sealed", "persona": persona},
-            tool_trace,
-        )
-        dep_now = max(0.1, float(dose_now.get("deposited_dose_ug", 1.0)))
-        dep_n95 = float(dose_n95.get("deposited_dose_ug", 0.0))
-        pct_cut = max(0.0, round((1.0 - dep_n95 / dep_now) * 100.0, 1))
-
-        reply = (
-            f"Dose Comparison for 30-min run in {city_name} (Current PM2.5: {pm25:.1f} µg/m³):\n"
-            f"• Unmasked Now: Inhaled dose {dose_now.get('inhaled_dose_ug', 0.0):.1f} µg "
-            f"({dose_now.get('who_daily_budget_pct', 0.0):.1f}% WHO 24h budget, {dose_now.get('cigarette_equivalent', 0.0):.2f} cigs eq, "
-            f"{dose_now.get('deposited_dose_ug', 0.0):.1f} µg deposited in lungs).\n"
-            f"• N95 Masked at 4 PM: Inhaled dose {dose_n95.get('inhaled_dose_ug', 0.0):.1f} µg "
-            f"({dose_n95.get('who_daily_budget_pct', 0.0):.1f}% WHO 24h budget, {dose_n95.get('cigarette_equivalent', 0.0):.2f} cigs eq, "
-            f"{dose_n95.get('deposited_dose_ug', 0.0):.1f} µg deposited).\n"
-            f"Wearing a sealed N95 mask delivers a {pct_cut:.1f}% reduction in alveolar particulate deposition."
-        )
-
-    # Intent routing
-    elif any(k in msg_lower for k in ["route", "path", "clean air", "cycling", "drive", "footway"]):
-        origin = (lat, lon)
-        destination = (round(lat + 0.03, 4), round(lon + 0.03, 4))
-        mode = "cycling" if "cycl" in msg_lower else "walking"
-        res = await _execute_and_trace(
-            "compare_clean_air_routes",
-            {"origin": origin, "destination": destination, "mode": mode, "lat": lat, "lon": lon, "persona": persona},
-            tool_trace,
-        )
-        fastest_id = res.get("fastest_route_id")
-        cleanest_id = res.get("cleanest_route_id")
-        max_savings = res.get("max_savings_pct", 0.0)
-        reply = (
-            f"Clean Air Route Evaluation: Evaluated {len(res.get('routes', []))} route alternatives for {mode}. "
-            f"Cleanest route ({cleanest_id}) saves {max_savings:.1f}% inhaled PM2.5 compared to fastest route ({fastest_id}) "
-            f"at regional background of {res.get('background_pm25', 100.0):.1f} µg/m³."
-        )
-
-    elif any(k in msg_lower for k in ["schedule", "routine", "commute", "jog", "plan", "daily"]):
-        tasks = [
-            {"name": "Morning Commute", "activity": "walking", "duration_minutes": 40, "earliest_hour": 7.0, "latest_hour": 10.0},
-            {"name": "Morning Jog", "activity": "running", "duration_minutes": 30, "earliest_hour": 6.0, "latest_hour": 9.0},
-            {"name": "Ventilate Bedroom", "activity": "ventilate_room", "duration_minutes": 60, "earliest_hour": 11.0, "latest_hour": 15.0},
-        ]
-        res = await _execute_and_trace(
-            "optimize_daily_schedule",
-            {"lat": lat, "lon": lon, "tasks": tasks, "persona": persona},
-            tool_trace,
-        )
-        schedule_data = res
-        reply = (
-            f"Optimized 24h Schedule: Resolved 0 conflicts across {len(res.get('scheduled_tasks', []))} tasks. "
-            f"Total optimized dose is {res.get('total_optimized_dose_ug', 0.0):.1f} µg vs baseline naive "
-            f"{res.get('baseline_naive_dose_ug', 0.0):.1f} µg (Total Savings: {res.get('total_savings_pct', 0.0):.1f}%)."
-        )
-
-    elif any(k in msg_lower for k in ["smog", "trap", "inversion", "lift", "boundary"]):
-        res = await _execute_and_trace("analyze_smog_trap", {"lat": lat, "lon": lon}, tool_trace)
-        reply = (
-            f"Smog Inversion Analysis: Ventilation Index is {res.get('ventilation_index_m2_s', 0.0):.1f} m²/s "
-            f"({res.get('status', 'unknown')}). {res.get('explanation', '')}"
-        )
-
-    elif any(k in msg_lower for k in ["window", "ventilate", "ventilation", "bedroom", "air out", "hepa"]):
-        res = await _execute_and_trace(
-            "optimize_window_ventilation",
-            {"lat": lat, "lon": lon, "has_hepa": "hepa" in msg_lower},
-            tool_trace,
-        )
-        reply = (
-            f"Indoor Ventilation Guidance: Optimal daylight window begins at {res.get('best_start_hour_iso')}. "
-            f"Minimum outdoor PM2.5 is {res.get('outdoor_pm25_min', 0.0):.1f} µg/m³. "
-            f"Expected indoor PM2.5 with windows closed is {res.get('indoor_pm25_closed', 0.0):.1f} µg/m³ vs "
-            f"{res.get('indoor_pm25_open', 0.0):.1f} µg/m³ open. {res.get('recommendation', '')}"
-        )
-
-    elif any(k in msg_lower for k in ["dose", "inhale", "mask", "cigarette", "copd", "asthma"]):
-        atm = await _execute_and_trace("fetch_atmospheric_state", {"city_or_coords": f"{lat},{lon}"}, tool_trace)
-        curr_pm = float(atm.get("current_pm25_ug_m3", 100.0))
-        res = await _execute_and_trace(
-            "simulate_inhaled_dose",
-            {"pm25": curr_pm, "activity": "walking", "duration_minutes": 60.0, "persona": persona},
-            tool_trace,
-        )
-        reply = (
-            f"Respiratory Dose Simulation: Inhaled dose is {res.get('inhaled_dose_ug', 0.0):.1f} µg "
-            f"({res.get('who_daily_budget_pct', 0.0):.1f}% of WHO 24h budget). "
-            f"Alveolar deposited dose: {res.get('deposited_dose_ug', 0.0):.1f} µg. "
-            f"Equivalent to {res.get('cigarette_equivalent', 0.0):.2f} cigarettes smoked."
-        )
-
-    else:
-        res = await _execute_and_trace("fetch_atmospheric_state", {"city_or_coords": f"{lat},{lon}"}, tool_trace)
-        reply = (
-            f"Atmospheric State for {city_name}: Current PM2.5 is "
-            f"{res.get('current_pm25_ug_m3', 0.0):.1f} µg/m³, NO2 is {res.get('current_no2_ug_m3', 0.0):.1f} µg/m³, "
-            f"O3 is {res.get('current_o3_ug_m3', 0.0):.1f} µg/m³, BLH is {res.get('boundary_layer_height_m', 0.0):.1f} m, "
-            f"and wind speed is {res.get('wind_speed_kmh', 0.0):.1f} km/h."
-        )
-
-    return {
-        "reply": reply,
-        "provider_used": "deterministic_fallback",
-        "tool_trace": tool_trace,
-        "schedule": schedule_data,
-    }
 
 
 async def run_copilot(
     message: str,
     city_name: str = "Delhi",
-    lat: float = 28.6139,
-    lon: float = 77.2090,
+    lat: float = DEFAULT_LAT,
+    lon: float = DEFAULT_LON,
     persona: str = "healthy_adult",
     history: list[dict[str, Any]] | None = None,
     city_or_coords: str | None = None,
 ) -> dict[str, Any]:
-    """Execute Glass-Box Copilot with Dual-LLM Failover and Deterministic Fallback."""
+    """Execute Glass-Box Copilot with Dual-LLM Failover and Deterministic Fallback.
+
+    Args:
+        message: User query string.
+        city_name: Active city display name.
+        lat: Active latitude.
+        lon: Active longitude.
+        persona: Active clinical persona identifier.
+        history: Optional list of recent chat history turns.
+        city_or_coords: Optional legacy city override parameter.
+
+    Returns:
+        Structured dictionary with reply, provider_used, tool_trace, and diagnostics.
+    """
     tool_trace: list[dict[str, Any]] = []
+    active_city = city_or_coords if (city_or_coords and (not city_name or city_name == "Delhi")) else city_name
+    active_lat, active_lon = lat, lon
 
-    # Handle legacy / fallback callers that pass city_or_coords
-    active_city = city_name
-    active_lat = lat
-    active_lon = lon
-    if city_or_coords and (not city_name or city_name == "Delhi"):
-        active_city = city_or_coords
-
-    if active_city in DEMO_CITIES and active_lat == 28.6139 and active_lon == 77.2090 and active_city != "Delhi":
+    if (
+        active_city in DEMO_CITIES
+        and active_lat == DEFAULT_LAT
+        and active_lon == DEFAULT_LON
+        and active_city != "Delhi"
+    ):
         active_lat = DEMO_CITIES[active_city]["lat"]
         active_lon = DEMO_CITIES[active_city]["lon"]
 
-    # 1. Primary: Google GenAI (gemini-2.5-flash / gemini-3.8-flash)
     gemini_error: str | None = None
     try:
         return await asyncio.wait_for(
             _run_gemini(message, active_city, active_lat, active_lon, persona, history or [], tool_trace),
             timeout=10.0,
         )
-    except Exception as e:  # noqa: BLE001
-        gemini_error = f"{type(e).__name__}: {e}"
-        logger.warning(
-            "Primary Gemini failed or unavailable (%s), triggering Groq failover. Exact fallback reason: %s",
-            e,
-            gemini_error,
-        )
+    except Exception as exc:  # noqa: BLE001
+        gemini_error = f"{type(exc).__name__}: {exc}"
+        logger.warning("Primary Gemini failed (%s), triggering Groq failover.", gemini_error)
 
-    # 2. Automatic Failover: Groq (openai/gpt-oss-120b / openai/gpt-oss-20b)
     groq_error: str | None = None
     try:
         return await asyncio.wait_for(
             _run_groq(message, active_city, active_lat, active_lon, persona, history or [], tool_trace),
             timeout=15.0,
         )
-    except Exception as e:  # noqa: BLE001
-        groq_error = f"{type(e).__name__}: {e}"
-        logger.warning(
-            "Groq failover failed or unavailable (%s), triggering deterministic fallback. Exact fallback reason: %s",
-            e,
-            groq_error,
-        )
+    except Exception as exc:  # noqa: BLE001
+        groq_error = f"{type(exc).__name__}: {exc}"
+        logger.warning("Groq failover failed (%s), triggering deterministic fallback.", groq_error)
 
-    # 3. Ultimate Safe Fallback: Deterministic offline execution citing exact numbers
     res = await _run_deterministic_fallback(message, active_city, active_lat, active_lon, persona, tool_trace)
     if gemini_error:
         res["gemini_error"] = gemini_error

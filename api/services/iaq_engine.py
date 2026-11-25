@@ -1,12 +1,17 @@
 """Indoor air quality (IAQ) and ventilation window optimization engine."""
 
 from datetime import datetime
+from typing import Final
 
 from api.models.schemas import VentilationWindowResponse
 
-CLOSED_IO_RATIO: float = 0.55
-OPEN_IO_RATIO: float = 0.95
-HEPA_REDUCTION: float = 0.60
+CLOSED_IO_RATIO: Final[float] = 0.55  # Indoor/outdoor infiltration ratio with closed windows
+OPEN_IO_RATIO: Final[float] = 0.95  # Indoor/outdoor infiltration ratio with open windows
+HEPA_REDUCTION: Final[float] = 0.60  # Fractional PM2.5 reduction with portable HEPA filter
+DAYLIGHT_START_HOUR: Final[int] = 6  # Earliest daylight ventilation hour (06:00 local)
+DAYLIGHT_END_HOUR: Final[int] = 22  # Latest daylight ventilation hour (22:00 local)
+EXCELLENT_OUTDOOR_PM25_UG_M3: Final[float] = 15.0  # WHO 24h guideline PM2.5 threshold (µg/m³)
+MODERATE_OUTDOOR_PM25_UG_M3: Final[float] = 35.0  # Brief cross-ventilation upper threshold (µg/m³)
 
 
 def _format_readable_hour(iso_str: str | None) -> str:
@@ -72,7 +77,7 @@ def find_optimal_ventilation_window(
         if i < len(hourly_pm25) and hourly_pm25[i] is not None:
             all_valid_indices.append(i)
             hour = _parse_hour(t_str)
-            if 6 <= hour <= 22:
+            if DAYLIGHT_START_HOUR <= hour <= DAYLIGHT_END_HOUR:
                 daylight_indices.append(i)
 
     # Fallback to all valid indices if daylight hours are not present
@@ -89,27 +94,29 @@ def find_optimal_ventilation_window(
         )
 
     # Find the index with the minimum PM2.5 concentration
-    best_idx = min(candidate_indices, key=lambda idx: float(hourly_pm25[idx]))  # type: ignore[arg-type]
-    outdoor_pm25_min = float(hourly_pm25[best_idx])  # type: ignore[arg-type]
+    def _pm25_at(idx: int) -> float:
+        val = hourly_pm25[idx]
+        return float(val) if val is not None else float("inf")
+
+    best_idx = min(candidate_indices, key=_pm25_at)
+    outdoor_pm25_min = _pm25_at(best_idx)
 
     best_start = hourly_times[best_idx]
     best_end = hourly_times[best_idx + 1] if best_idx + 1 < len(hourly_times) else None
 
     # Calculate indoor infiltration
-    # With windows closed, building envelope reduces infiltration to 0.55
-    # If HEPA is active, HEPA further reduces indoor PM2.5 by 60%
     closed_factor = CLOSED_IO_RATIO * (1.0 - HEPA_REDUCTION) if has_hepa else CLOSED_IO_RATIO
     indoor_pm25_closed = round(outdoor_pm25_min * closed_factor, 2)
     indoor_pm25_open = round(outdoor_pm25_min * OPEN_IO_RATIO, 2)
 
     # Formulate clinical/environmental recommendation
     start_readable = _format_readable_hour(best_start)
-    if outdoor_pm25_min <= 15.0:
+    if outdoor_pm25_min <= EXCELLENT_OUTDOOR_PM25_UG_M3:
         recommendation = (
             f"Excellent window for natural ventilation at {start_readable}. Outdoor PM2.5 drops to "
             f"{outdoor_pm25_min:.1f} µg/m³. Safe to air out indoor living spaces."
         )
-    elif outdoor_pm25_min <= 35.0:
+    elif outdoor_pm25_min <= MODERATE_OUTDOOR_PM25_UG_M3:
         recommendation = (
             f"Moderate outdoor air quality at {start_readable} ({outdoor_pm25_min:.1f} µg/m³). Brief 15-minute "
             f"cross-ventilation permissible if indoor CO2 is elevated, then close windows."

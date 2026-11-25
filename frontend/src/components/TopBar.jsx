@@ -163,12 +163,14 @@ export default function TopBar({
                 onKeyDown={handleKeyDown}
                 onFocus={() => searchResults.length > 0 && setShowDropdown(true)}
                 placeholder="Search city or coordinates (lat, lon)..."
+                aria-label="Search city or coordinates"
                 className="w-full rounded-xl border border-glass bg-surface py-2 pl-9 pr-8 text-xs text-slate-100 placeholder-slate-500 backdrop-blur-md transition-all focus:border-cobalt/50 focus:bg-white/[0.06] focus:outline-none focus:ring-1 focus:ring-cobalt/50"
               />
               {searchQuery && (
                 <button
                   type="button"
                   onClick={() => setSearchQuery('')}
+                  aria-label="Clear search"
                   className="absolute right-2.5 p-0.5 text-slate-400 hover:text-white"
                 >
                   <X className="h-3.5 w-3.5" />
@@ -178,11 +180,16 @@ export default function TopBar({
 
             {/* City Not Found Notification Toast */}
             {toastMessage && (
-              <div className="absolute left-0 top-full mt-1.5 w-full z-50 rounded-xl border border-amber/40 bg-[#16161A] px-3.5 py-2 text-xs font-medium text-amber shadow-2xl backdrop-blur-2xl flex items-center justify-between">
+              <div
+                role="status"
+                aria-live="polite"
+                className="absolute left-0 top-full mt-1.5 w-full z-50 rounded-xl border border-amber/40 bg-[#16161A] px-3.5 py-2 text-xs font-medium text-amber shadow-2xl backdrop-blur-2xl flex items-center justify-between"
+              >
                 <span>{toastMessage}</span>
                 <button
                   type="button"
                   onClick={() => setToastMessage(null)}
+                  aria-label="Dismiss notification"
                   className="p-0.5 text-amber/70 hover:text-amber"
                 >
                   <X className="h-3 w-3" />
@@ -262,7 +269,7 @@ export default function TopBar({
             <span className="text-[11px] font-medium uppercase tracking-wider text-slate-400 mr-1 shrink-0">
               Clinical Persona:
             </span>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Clinical persona selector">
               {PERSONAS.map((p) => {
                 const Icon = p.icon;
                 const isSelected = activePersona === p.id;
@@ -270,6 +277,8 @@ export default function TopBar({
                   <button
                     key={p.id}
                     type="button"
+                    role="tab"
+                    aria-selected={isSelected}
                     onClick={() => onSelectPersona(p.id)}
                     title={p.desc}
                     className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-all active:scale-[0.97] ${

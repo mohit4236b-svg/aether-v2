@@ -6,7 +6,7 @@ clean air routing, deterministic schedule optimization, and Glass-Box Agentic Co
 
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -103,7 +103,7 @@ def health_check() -> dict[str, Any]:
     """Return health status, current ISO timestamp, and available providers without exposing keys."""
     return {
         "status": "healthy",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "providers": {
             "gemini": bool(os.environ.get("GEMINI_API_KEY", "").strip()),
             "groq": bool(os.environ.get("GROQ_API_KEY", "").strip()),
@@ -156,7 +156,7 @@ async def get_atmosphere(
     current_index = 0
     if w_times:
         try:
-            tz = timezone(timedelta(seconds=utc_offset)) if utc_offset is not None else timezone.utc
+            tz = timezone(timedelta(seconds=utc_offset)) if utc_offset is not None else UTC
             now_local = datetime.now(tz)
             target_str = now_local.strftime("%Y-%m-%dT%H:00")
             if target_str in w_times:

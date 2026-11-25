@@ -143,11 +143,17 @@ export default function DoseSimulator({ atmosphere, activePersona }) {
                 V_E = {doseCalculation.veEffective} m³/hr
               </span>
             </div>
-            <div className="grid grid-cols-4 gap-1.5 rounded-xl bg-white/[0.03] p-1 border border-glass">
+            <div
+              role="tablist"
+              aria-label="Physical activity level"
+              className="grid grid-cols-4 gap-1.5 rounded-xl bg-white/[0.03] p-1 border border-glass"
+            >
               {['resting', 'walking', 'cycling', 'running'].map((act) => (
                 <button
                   key={act}
                   type="button"
+                  role="tab"
+                  aria-selected={activity === act}
                   onClick={() => setActivity(act)}
                   className={`rounded-lg py-1.5 text-xs font-medium capitalize transition-all active:scale-[0.97] ${
                     activity === act
@@ -164,17 +170,21 @@ export default function DoseSimulator({ atmosphere, activePersona }) {
           {/* 2. Duration Slider */}
           <div>
             <div className="flex items-center justify-between text-xs mb-1.5">
-              <span className="text-slate-400 font-medium">Exertion Duration:</span>
+              <label htmlFor="dose-duration-slider" className="text-slate-400 font-medium">
+                Exertion Duration:
+              </label>
               <span className="font-mono text-white font-semibold text-xs tabular-nums">
                 {durationMinutes} minutes ({Math.round((durationMinutes / 60) * 10) / 10}h)
               </span>
             </div>
             <input
+              id="dose-duration-slider"
               type="range"
               min={10}
               max={120}
               step={5}
               value={durationMinutes}
+              aria-valuetext={`${durationMinutes} minutes`}
               onChange={(e) => setDurationMinutes(Number(e.target.value))}
               className="w-full accent-cobalt cursor-pointer bg-white/10 rounded-lg h-2"
             />
@@ -184,11 +194,17 @@ export default function DoseSimulator({ atmosphere, activePersona }) {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <span className="text-xs text-slate-400 font-medium block mb-1.5">Mask Filtration:</span>
-              <div className="grid grid-cols-4 gap-1 rounded-xl bg-white/[0.03] p-1 border border-glass">
+              <div
+                role="tablist"
+                aria-label="Mask filtration type"
+                className="grid grid-cols-4 gap-1 rounded-xl bg-white/[0.03] p-1 border border-glass"
+              >
                 {['none', 'cloth', 'surgical', 'n95'].map((m) => (
                   <button
                     key={m}
                     type="button"
+                    role="tab"
+                    aria-selected={mask === m}
                     onClick={() => setMask(m)}
                     className={`rounded-lg py-1 text-xs font-medium capitalize transition-all active:scale-[0.97] ${
                       mask === m
@@ -204,11 +220,17 @@ export default function DoseSimulator({ atmosphere, activePersona }) {
 
             <div>
               <span className="text-xs text-slate-400 font-medium block mb-1.5">Mask Fit Quality:</span>
-              <div className="grid grid-cols-2 gap-1 rounded-xl bg-white/[0.03] p-1 border border-glass">
+              <div
+                role="tablist"
+                aria-label="Mask fit quality"
+                className="grid grid-cols-2 gap-1 rounded-xl bg-white/[0.03] p-1 border border-glass"
+              >
                 {['sealed', 'loose'].map((fit) => (
                   <button
                     key={fit}
                     type="button"
+                    role="tab"
+                    aria-selected={maskFit === fit}
                     disabled={mask === 'none'}
                     onClick={() => setMaskFit(fit)}
                     className={`rounded-lg py-1 text-xs font-medium capitalize transition-all active:scale-[0.97] ${
@@ -229,7 +251,9 @@ export default function DoseSimulator({ atmosphere, activePersona }) {
           {/* 4. Departure Hour Slider using live 24h PM2.5 */}
           <div>
             <div className="flex items-center justify-between text-xs mb-1.5">
-              <span className="text-slate-400 font-medium">Departure Hour (24h Diurnal Forecast):</span>
+              <label htmlFor="dose-departure-slider" className="text-slate-400 font-medium">
+                Departure Hour (24h Diurnal Forecast):
+              </label>
               <div className="flex items-center gap-1.5 font-mono text-xs">
                 <span className="text-white font-semibold">{departureTimeStr}</span>
                 <span className="text-slate-500">•</span>
@@ -237,11 +261,13 @@ export default function DoseSimulator({ atmosphere, activePersona }) {
               </div>
             </div>
             <input
+              id="dose-departure-slider"
               type="range"
               min={0}
               max={23}
               step={1}
               value={departureHour}
+              aria-valuetext={`${departureTimeStr}, ${activePm25.toFixed(1)} micrograms per cubic meter PM2.5`}
               onChange={(e) => setDepartureHour(Number(e.target.value))}
               className="w-full accent-cobalt cursor-pointer bg-white/10 rounded-lg h-2"
             />

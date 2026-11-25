@@ -1,12 +1,12 @@
 """Pydantic v2 schemas and enumerations for Aether v2 physical and clinical engines."""
 
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
-class PersonaType(str, Enum):
+class PersonaType(StrEnum):
     """Clinical persona categories for tailored exposure modeling."""
 
     healthy_adult = "healthy_adult"
@@ -16,7 +16,7 @@ class PersonaType(str, Enum):
     elderly_cardio = "elderly_cardio"
 
 
-class ActivityType(str, Enum):
+class ActivityType(StrEnum):
     """Physical activity levels impacting minute ventilation rate."""
 
     resting = "resting"
@@ -25,7 +25,7 @@ class ActivityType(str, Enum):
     running = "running"
 
 
-class MaskType(str, Enum):
+class MaskType(StrEnum):
     """Mask filtration classifications."""
 
     none = "none"
@@ -34,14 +34,14 @@ class MaskType(str, Enum):
     n95 = "n95"
 
 
-class MaskFit(str, Enum):
+class MaskFit(StrEnum):
     """Mask fit quality factor."""
 
     sealed = "sealed"
     loose = "loose"
 
 
-class DispersionStatus(str, Enum):
+class DispersionStatus(StrEnum):
     """Atmospheric ventilation and pollutant dispersion state."""
 
     trapped = "trapped"

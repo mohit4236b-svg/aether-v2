@@ -219,7 +219,12 @@ export default function AgentDrawer({
   const badgeInfo = getProviderBadge(latestProvider);
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm transition-all duration-300">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Aether AI Co-Pilot"
+      className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm transition-all duration-300"
+    >
       {/* Slide-Over Drawer Container */}
       <div className="relative flex h-full w-full max-w-lg flex-col border-l border-glass bg-[#0D0D0F] shadow-2xl backdrop-blur-2xl transition-transform duration-300 sm:w-[480px]">
         {/* Header */}
@@ -250,6 +255,7 @@ export default function AgentDrawer({
           <button
             type="button"
             onClick={onClose}
+            aria-label="Close Co-Pilot drawer"
             className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-white"
           >
             <X className="h-5 w-5" />
@@ -257,7 +263,7 @@ export default function AgentDrawer({
         </div>
 
         {/* Message Stream */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+        <div className="flex-1 overflow-y-auto p-5 space-y-4" aria-live="polite">
           {messages.map((msg) => {
             const isUser = msg.role === 'user';
             const hasTools = Array.isArray(msg.tool_trace) && msg.tool_trace.length > 0;
@@ -282,6 +288,7 @@ export default function AgentDrawer({
                         <button
                           type="button"
                           onClick={() => toggleTrace(msg.id)}
+                          aria-expanded={isTraceExpanded}
                           className="flex w-full items-center justify-between px-3.5 py-2 text-left text-xs text-slate-300 transition-colors hover:bg-white/[0.04]"
                         >
                           <div className="flex items-center gap-2">
@@ -407,7 +414,7 @@ export default function AgentDrawer({
           )}
 
           {error && (
-            <div className="rounded-xl border border-crimson/40 bg-crimson/10 p-3 text-xs text-rose-200">
+            <div role="alert" className="rounded-xl border border-crimson/40 bg-crimson/10 p-3 text-xs text-rose-200">
               <div className="flex items-center gap-2 font-semibold text-crimson mb-1">
                 <AlertTriangle className="h-4 w-4" />
                 <span>Co-Pilot Connection Error</span>
@@ -453,11 +460,13 @@ export default function AgentDrawer({
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               placeholder="Ask Aether Co-Pilot (e.g. routine schedule, routes, smog trap)..."
+              aria-label="Ask Aether Co-Pilot"
               disabled={isLoading}
               className="flex-1 rounded-xl border border-glass bg-surface px-3.5 py-2.5 text-xs text-slate-100 placeholder-slate-500 backdrop-blur-md transition-all focus:border-cobalt/50 focus:bg-white/[0.06] focus:outline-none focus:ring-1 focus:ring-cobalt/50 disabled:opacity-50"
             />
             <button
               type="submit"
+              aria-label="Send message"
               disabled={isLoading || !inputValue.trim()}
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-cobalt text-white shadow-glowCobalt transition-all hover:bg-cobalt/90 active:scale-[0.95] disabled:opacity-50 disabled:cursor-not-allowed"
             >

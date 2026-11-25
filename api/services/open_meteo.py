@@ -148,7 +148,11 @@ async def geocode_city(
                 or address.get("municipality")
                 or address.get("hamlet")
                 or address.get("suburb")
-                or (str(item.get("display_name", "")).split(",")[0].strip() if item.get("display_name") else clean_query)
+                or (
+                    str(item.get("display_name", "")).split(",")[0].strip()
+                    if item.get("display_name")
+                    else clean_query
+                )
             )
             country = str(address.get("country", ""))
             admin1 = str(address.get("state") or address.get("province") or address.get("region", ""))
